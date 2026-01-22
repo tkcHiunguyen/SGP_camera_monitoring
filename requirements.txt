@@ -1,0 +1,9 @@
+opencv-python
+numpy
+onnxruntime
+ultralytics
+pillow
+psutil
+pywin32
+pyyaml
+requests

@@ -1,0 +1,15 @@
+{
+  "app": {
+    "fps_record": 15,
+    "fps_detect": 5,
+    "days_keep": 7,
+    "min_free_gb": 10,
+    "yolo": {
+      "model_path": "models/yolo.onnx",
+      "conf_thres": 0.5,
+      "start_frames": 3,
+      "stop_seconds": 5
+    }
+  },
+  "cameras": []
+}
