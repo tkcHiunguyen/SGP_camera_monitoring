@@ -62,34 +62,36 @@ class AppUI:
         y = max(0, (screen_h - height) // 2) - 100
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
-        container = ttk.Frame(self.root, padding=12)
+        container = ttk.Frame(self.root, padding=0)
         container.pack(fill=tk.BOTH, expand=True)
 
-        header = ttk.Frame(container)
-        header.pack(fill=tk.X)
-        ttk.Label(header, text="\uf030", font=("Font Awesome 6 Free Solid", 16)).pack(
+        self.header_frame = ttk.Frame(container)
+        self.header_frame.pack(fill=tk.X)
+        ttk.Label(
+            self.header_frame, text="\uf030", font=("Font Awesome 6 Free Solid", 16)
+        ).pack(
             side=tk.LEFT, padx=(0, 8)
         )
         ttk.Label(
-            header, text="Camera Recorder", font=("Bai Jamjuree", 18, "bold")
+            self.header_frame, text="Camera Recorder", font=("Bai Jamjuree", 18, "bold")
         ).pack(side=tk.LEFT)
 
-        menu_bar = ttk.Frame(container)
-        menu_bar.pack(fill=tk.X, pady=(10, 12))
+        self.menu_bar = ttk.Frame(container)
+        self.menu_bar.pack(fill=tk.X, pady=(10, 12))
 
         self.active_tab = tk.StringVar(value="Manage")
         ttk.Button(
-            menu_bar,
+            self.menu_bar,
             text="Manage Cameras",
             command=lambda: self._set_tab("Manage"),
         ).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(
-            menu_bar,
+            self.menu_bar,
             text="Recorder",
             command=lambda: self._set_tab("Recorder"),
         ).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(
-            menu_bar,
+            self.menu_bar,
             text="Liveview",
             command=lambda: self._set_tab("Liveview"),
         ).pack(side=tk.LEFT)
@@ -104,7 +106,10 @@ class AppUI:
             self.content, self.camera_manager, self.recorder_manager
         )
         self.live_view = LiveView(
-            self.content, self.camera_manager, self.recorder_manager
+            self.content,
+            self.camera_manager,
+            self.recorder_manager,
+            on_fullscreen_toggle=self._on_liveview_fullscreen,
         )
 
         self.manage_view.pack(fill=tk.BOTH, expand=True)
@@ -119,3 +124,13 @@ class AppUI:
             self.recorder_view.pack(fill=tk.BOTH, expand=True)
         else:
             self.live_view.pack(fill=tk.BOTH, expand=True)
+
+    def _on_liveview_fullscreen(self, fullscreen: bool) -> None:
+        if fullscreen:
+            self.root.attributes("-fullscreen", True)
+            self.header_frame.pack_forget()
+            self.menu_bar.pack_forget()
+        else:
+            self.root.attributes("-fullscreen", False)
+            self.header_frame.pack(before=self.content, fill=tk.X)
+            self.menu_bar.pack(before=self.content, fill=tk.X, pady=(10, 12))
