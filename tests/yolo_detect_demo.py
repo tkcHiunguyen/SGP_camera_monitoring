@@ -1,11 +1,19 @@
 import cv2
 import time
 import threading
+import torch
 from ultralytics import YOLO
 
-MODEL_PATH = "yolo26n.pt"
-CAMERA_INDEX = 0
+MODEL_PATH = "3103252.pt"
+CAMERA_INDEX = (
+    "rtsp://admin:bvTTDCaps999@hcv08bwvjn5.sn.mynetname.net:555/Streaming/Channels/3601"
+)
 CONF_THRES = 0.5
+DEVICE = 0  # 0 = first CUDA device, "cpu" to force CPU
+BENCHMARK = True
+BENCH_FRAMES = 500
+BENCH_WARMUP = 10
+BENCH_DEVICES = ("cpu", 0)
 
 
 class CameraStream:
@@ -84,6 +92,10 @@ class CameraStream:
 
 
 def main():
+    if BENCHMARK:
+        run_benchmark()
+        return
+
     model = YOLO(MODEL_PATH)
     stream = CameraStream(CAMERA_INDEX).start()
 
@@ -97,7 +109,9 @@ def main():
                 time.sleep(0.01)
                 continue
 
-            result = model.track(frame, persist=True, conf=CONF_THRES, verbose=False)[0]
+            result = model.track(
+                frame, persist=True, conf=CONF_THRES, device=DEVICE, verbose=False
+            )[0]
 
             boxes = result.boxes
             if boxes is not None:
@@ -133,6 +147,41 @@ def main():
     finally:
         stream.stop()
         cv2.destroyAllWindows()
+
+
+def run_benchmark():
+    stream = CameraStream(CAMERA_INDEX).start()
+    frames = []
+
+    try:
+        while len(frames) < BENCH_FRAMES:
+            ok, frame = stream.read()
+            if not ok:
+                time.sleep(0.01)
+                continue
+            frames.append(frame)
+
+        for device in BENCH_DEVICES:
+            model = YOLO(MODEL_PATH)
+            for i in range(min(BENCH_WARMUP, len(frames))):
+                model.track(
+                    frames[i], persist=True, conf=CONF_THRES, device=device, verbose=False
+                )
+
+            if torch.cuda.is_available() and device != "cpu":
+                torch.cuda.synchronize()
+            start = time.perf_counter()
+            for frame in frames:
+                model.track(
+                    frame, persist=True, conf=CONF_THRES, device=device, verbose=False
+                )
+            if torch.cuda.is_available() and device != "cpu":
+                torch.cuda.synchronize()
+            elapsed = time.perf_counter() - start
+            fps = len(frames) / max(1e-9, elapsed)
+            print(f"benchmark device={device} frames={len(frames)} fps={fps:.2f}")
+    finally:
+        stream.stop()
 
 
 def _draw_label(frame, text, x, y, bg=(0, 0, 0), fg=(255, 255, 255)):
