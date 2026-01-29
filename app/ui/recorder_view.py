@@ -27,6 +27,21 @@ class RecorderView(ttk.Frame):
         self._refresh_jobs()
 
     def _build_ui(self) -> None:
+        style = ttk.Style(self)
+        style.configure("Recorder.CardHeader.TFrame", background="#dbe4f0")
+        style.configure(
+            "Recorder.CardHeader.TLabel",
+            background="#dbe4f0",
+            font=("Bai Jamjuree", 12, "bold"),
+        )
+        style.configure(
+            "Recorder.CardHeaderStatus.TLabel",
+            background="#dbe4f0",
+            font=("Bai Jamjuree", 11),
+            foreground="#16a34a",
+        )
+        style.configure("Recorder.CardHeader.TCheckbutton", background="#dbe4f0")
+
         recorder_bar = ttk.Frame(self)
         recorder_bar.pack(fill=tk.X, padx=8, pady=(12, 6))
 
@@ -111,6 +126,10 @@ class RecorderView(ttk.Frame):
                     entry["source_var"].set(
                         "Device" if camera.source == "device" else "RTSP"
                     )
+                    entry["fps_var"].set(f"Write FPS: {job.fps:.1f}")
+                    entry["motion_var"].set(
+                        self.recorder_manager.get_motion_enabled(job.camera_name)
+                    )
             self._layout_cards(jobs)
 
         self._update_selection_ui()
@@ -119,12 +138,13 @@ class RecorderView(ttk.Frame):
     def _create_job_card(self, camera: CameraConfig, job) -> dict[str, object]:
         card = ttk.Frame(self.jobs_frame, padding=10, relief="ridge")
 
-        header = ttk.Frame(card)
+        header = ttk.Frame(card, style="Recorder.CardHeader.TFrame")
         header.pack(fill=tk.X)
         selected_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             header,
             variable=selected_var,
+            style="Recorder.CardHeader.TCheckbutton",
             command=lambda name=camera.name, var=selected_var: self._toggle_select(
                 name, var
             ),
@@ -132,15 +152,33 @@ class RecorderView(ttk.Frame):
         ttk.Label(
             header,
             text=camera.name,
-            font=("Bai Jamjuree", 12, "bold"),
+            style="Recorder.CardHeader.TLabel",
         ).pack(side=tk.LEFT)
         status_var = tk.StringVar(value=job.status)
         ttk.Label(
             header,
             textvariable=status_var,
-            foreground="#16a34a",
-            font=("Bai Jamjuree", 11),
+            style="Recorder.CardHeaderStatus.TLabel",
         ).pack(side=tk.RIGHT)
+        header.bind(
+            "<Button-1>",
+            lambda _e, name=camera.name, var=selected_var: self._toggle_header_select(
+                name, var
+            ),
+        )
+        header.bind("<Enter>", lambda _e: header.configure(cursor="hand2"))
+        header.bind("<Leave>", lambda _e: header.configure(cursor=""))
+        for widget in header.winfo_children():
+            if isinstance(widget, ttk.Checkbutton):
+                continue
+            widget.bind(
+                "<Button-1>",
+                lambda _e, name=camera.name, var=selected_var: self._toggle_header_select(
+                    name, var
+                ),
+            )
+            widget.bind("<Enter>", lambda _e, w=widget: w.configure(cursor="hand2"))
+            widget.bind("<Leave>", lambda _e, w=widget: w.configure(cursor=""))
 
         details = ttk.Frame(card)
         details.pack(fill=tk.X, pady=(6, 0))
@@ -159,6 +197,26 @@ class RecorderView(ttk.Frame):
             font=("Bai Jamjuree", 11),
         ).pack(side=tk.LEFT, padx=(16, 0))
 
+        fps_frame = ttk.Frame(card)
+        fps_frame.pack(fill=tk.X, pady=(2, 0))
+        fps_var = tk.StringVar(value=f"Write FPS: {job.fps:.1f}")
+        ttk.Label(
+            fps_frame,
+            textvariable=fps_var,
+            font=("Bai Jamjuree", 11),
+        ).pack(side=tk.LEFT)
+        motion_var = tk.BooleanVar(value=False)
+        motion_check = ttk.Checkbutton(
+            fps_frame,
+            text="Motion detection",
+            variable=motion_var,
+            command=lambda name=camera.name, var=motion_var: self._toggle_motion(
+                name, var
+            ),
+        )
+        motion_check.pack(side=tk.LEFT, padx=(16, 0))
+        motion_var.set(False)
+
         actions = ttk.Frame(card)
         actions.pack(fill=tk.X, pady=(8, 0))
         ttk.Button(
@@ -176,8 +234,17 @@ class RecorderView(ttk.Frame):
             "frame": card,
             "status_var": status_var,
             "source_var": source_var,
+            "fps_var": fps_var,
+            "motion_var": motion_var,
             "selected_var": selected_var,
         }
+
+    def _toggle_header_select(self, name: str, var: tk.BooleanVar) -> None:
+        var.set(not var.get())
+        self._toggle_select(name, var)
+
+    def _toggle_motion(self, name: str, var: tk.BooleanVar) -> None:
+        self.recorder_manager.set_motion_enabled(name, var.get())
 
     def _layout_cards(self, jobs: list | None = None) -> None:
         if jobs is None:

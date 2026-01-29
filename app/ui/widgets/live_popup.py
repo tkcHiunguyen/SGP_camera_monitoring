@@ -7,6 +7,7 @@ import cv2
 from PIL import Image, ImageTk
 
 from app.config.models import CameraConfig
+from app.core.motion_detector import apply_motion, ensure_motion, get_motion_config
 from app.utils.paths import get_pictures_dir
 
 MODEL_PATH = "3103252.pt"
@@ -35,7 +36,10 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
     display_frame = {"frame": None}
     frame_lock = threading.Lock()
     detect_enabled = tk.BooleanVar(value=False)
+    motion_enabled = tk.BooleanVar(value=False)
     detector = {"model": None}
+    motion_state = {"bg": None}
+    motion_log = {"t": 0.0, "frames": 0, "ms": 0.0, "last": ""}
     prev_time = {"t": time.time()}
     fps_val = {"v": 0.0}
     resized_once = {"done": False}
@@ -73,6 +77,9 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
     ttk.Checkbutton(action_row, text="Detect", variable=detect_enabled).pack(
         side=tk.LEFT, padx=(12, 0)
     )
+    ttk.Checkbutton(action_row, text="Motion", variable=motion_enabled).pack(
+        side=tk.LEFT, padx=(12, 0)
+    )
     ttk.Button(action_row, text="Exit", command=close_popup).pack(side=tk.RIGHT)
 
     video_label = ttk.Label(dialog)
@@ -107,7 +114,7 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
 
     def detect_loop() -> None:
         while not stop_event.is_set():
-            if not detect_enabled.get():
+            if not detect_enabled.get() and not motion_enabled.get():
                 time.sleep(0.02)
                 continue
             with frame_lock:
@@ -115,9 +122,48 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
             if frame is None:
                 time.sleep(0.01)
                 continue
-            _ensure_detector(detector)
-            if detector["model"] is not None:
-                _apply_detection(frame, detector["model"])
+            if motion_enabled.get():
+                t0 = time.perf_counter()
+                config = get_motion_config()
+                ensure_motion(motion_state, config)
+                if motion_state["bg"] is None:
+                    time.sleep(0.02)
+                    continue
+                boxes, fg = apply_motion(frame, motion_state, config)
+                dt_ms = (time.perf_counter() - t0) * 1000.0
+                now = time.time()
+                motion_log["frames"] += 1
+                motion_log["ms"] += dt_ms
+                if now - motion_log["t"] > 1.0:
+                    motion_log["t"] = now
+                    avg_ms = motion_log["ms"] / max(1, motion_log["frames"])
+                    avg_fps = 1000.0 / max(1e-6, avg_ms)
+                    motion_log["frames"] = 0
+                    motion_log["ms"] = 0.0
+                    fg_count = int((fg > 0).sum()) if fg is not None else 0
+                    motion_log["last"] = (
+                        f"motion {avg_ms:.2f}ms ({avg_fps:.1f} fps) "
+                        f"boxes:{len(boxes)} fg:{fg_count}"
+                    )
+                if motion_log["last"]:
+                    _draw_label(
+                        frame,
+                        motion_log["last"],
+                        10,
+                        90,
+                        bg=(0, 0, 0),
+                        fg=(255, 255, 255),
+                    )
+                if boxes:
+                    for x, y, w, h in boxes:
+                        cv2.rectangle(
+                            frame, (x, y), (x + w, y + h), (0, 200, 255), 2
+                        )
+                    _draw_label(frame, "MOTION", 10, 60, bg=(0, 0, 0), fg=(0, 200, 255))
+            if detect_enabled.get():
+                _ensure_detector(detector)
+                if detector["model"] is not None:
+                    _apply_detection(frame, detector["model"])
             with frame_lock:
                 display_frame["frame"] = frame
             time.sleep(0.01)
@@ -129,7 +175,7 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
         if stop_event.is_set():
             return
         with frame_lock:
-            if detect_enabled.get():
+            if detect_enabled.get() or motion_enabled.get():
                 frame = display_frame["frame"]
             else:
                 frame = raw_frame["frame"]

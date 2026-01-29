@@ -91,22 +91,6 @@ class JobDialog:
         )
         cam_box.pack(anchor="w", pady=(0, 12))
 
-        ttk.Label(single_tab, text="Mode:", style="Job.TLabel").pack(
-            anchor="w", pady=(0, 6)
-        )
-        mode_var = tk.StringVar(value="Continuous")
-        mode_box = ttk.Combobox(
-            single_tab,
-            textvariable=mode_var,
-            values=["Continuous"],
-            width=30,
-            style="Job.TCombobox",
-        )
-        mode_box.current(0)
-        mode_box.set("Continuous")
-        mode_box.configure(state="readonly")
-        mode_box.pack(anchor="w", pady=(0, 12))
-
         ttk.Label(single_tab, text="Output:", style="Job.TLabel").pack(
             anchor="w", pady=(0, 6)
         )
@@ -120,20 +104,8 @@ class JobDialog:
         multi_header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         multi_header.columnconfigure(2, weight=1)
 
-        ttk.Label(multi_header, text="Mode:", style="Job.TLabel").grid(
-            row=0, column=0, sticky="w"
-        )
-        multi_mode = ttk.Combobox(
-            multi_header,
-            values=["Continuous"],
-            width=16,
-            style="Job.TCombobox",
-            state="disabled",
-        )
-        multi_mode.current(0)
-        multi_mode.grid(row=0, column=1, sticky="w", padx=(8, 16))
         ttk.Label(multi_header, text="Select cameras:", style="Job.TLabel").grid(
-            row=0, column=2, sticky="w"
+            row=0, column=0, sticky="w"
         )
 
         list_frame = ttk.Frame(multi_tab, style="Job.TFrame")
@@ -168,14 +140,14 @@ class JobDialog:
             command=lambda: cam_list.select_set(0, tk.END),
             style="Job.TButton",
             width=10,
-        ).grid(row=0, column=3, sticky="e", padx=(8, 6))
+        ).grid(row=0, column=1, sticky="e", padx=(8, 6))
         ttk.Button(
             multi_header,
             text="Clear",
             command=lambda: cam_list.selection_clear(0, tk.END),
             style="Job.TButton",
             width=8,
-        ).grid(row=0, column=4, sticky="e")
+        ).grid(row=0, column=2, sticky="e")
 
         info = ttk.Label(
             multi_tab,

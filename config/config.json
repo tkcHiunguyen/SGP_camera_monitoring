@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "app": {
+    "fps_record": 15,
+    "fps_detect": 5,
+    "days_keep": 7,
+    "min_free_gb": 10,
+    "enable_disk_check": true,
+    "enable_disk_quota": true,
+    "enable_retention": true,
+    "files_dir": "Files",
+    "cam_reconnect_min_s": 0.5,
+    "cam_reconnect_max_s": 30.0,
+    "cam_stale_s": 5.0,
+    "yolo": {
+      "model_path": "models/yolo.onnx",
+      "conf_thres": 0.5,
+      "start_frames": 3,
+      "stop_seconds": 5
+    },
+    "tracking": {
+      "enabled": true,
+      "model_path": "models/yolo26n.pt",
+      "conf_thres": 0.6,
+      "use_gpu": true
+    }
+  }
+}

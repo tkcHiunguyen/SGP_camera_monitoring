@@ -6,9 +6,10 @@ This app is a Windows desktop recorder for multiple RTSP cameras with optional p
 ## Modules
 - app/main.py: entrypoint, single-instance guard, logging, config bootstrap, UI startup.
 - app/ui/: Tkinter UI for camera CRUD and settings.
-- app/core/: camera manager, worker threads, view compositor, and runtime state.
-- app/detect/: person detector (ONNXRuntime or Ultralytics fallback).
-- app/storage/: video writer, retention, disk quota, snapshots.
+- app/core/: camera manager, worker threads, view compositor, recording, and tracking.
+- app/storage/: storage layout helpers and maintenance (retention, disk quota).
+- app/utils/: shared helpers (paths, logging, RTSP URL builder).
+- app/ui/widgets/: reusable Tkinter widgets.
 - app/config/: config models and JSON load/save.
 - app/utils/: shared helpers (logging, threading, time, paths).
 

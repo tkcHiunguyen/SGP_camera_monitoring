@@ -94,25 +94,28 @@ class ManageView(ttk.Frame):
 
         self.tree = ttk.Treeview(
             self,
-            columns=("name", "source", "link", "indicator", "status", "live"),
+            columns=("enabled", "name", "source", "link", "indicator", "status", "live"),
             show="headings",
             height=12,
         )
+        self.tree.heading("enabled", text="Enable")
         self.tree.heading("name", text="Camera name")
         self.tree.heading("source", text="Source")
         self.tree.heading("link", text="RTSP link")
         self.tree.heading("indicator", text="State")
         self.tree.heading("status", text="Status")
         self.tree.heading("live", text="Live")
-        self.tree.column("name", width=180, stretch=False)
+        self.tree.column("enabled", width=70, anchor="center", stretch=False)
+        self.tree.column("name", width=150, stretch=False)
         self.tree.column("source", width=90, stretch=False)
         self.tree.column("link", width=420, stretch=True)
         self.tree.column("indicator", width=60, anchor="center", stretch=False)
-        self.tree.column("status", width=120, stretch=False)
+        self.tree.column("status", width=90, stretch=False)
         self.tree.column("live", width=60, anchor="center", stretch=False)
         self.tree.tag_configure("connected", background="#c9f7d6")
         self.tree.tag_configure("not_connected", background="#ffd6d6")
         self.tree.tag_configure("recording", background="#cfe8ff")
+        self.tree.tag_configure("disabled", background="#e5e7eb", foreground="#6b7280")
         self.tree.bind("<Button-1>", self._on_manage_tree_click)
 
     def _refresh_camera_list(self) -> None:
@@ -134,7 +137,10 @@ class ManageView(ttk.Frame):
                     if cam.source == "device"
                     else cam.rtsp_url
                 )
-                status = self._get_status(cam.name)
+                if not cam.enabled:
+                    status = "disabled"
+                else:
+                    status = self._get_status(cam.name)
                 if not self._passes_filter(cam.name, status):
                     continue
                 indicator = self._status_indicator(status)
@@ -145,11 +151,14 @@ class ManageView(ttk.Frame):
                     tags = ("connected",)
                 elif status == "not connected":
                     tags = ("not_connected",)
+                elif status == "disabled":
+                    tags = ("disabled",)
                 merged_tags = list(tags)
+                enabled_mark = "\u2611" if cam.enabled else "\u2610"
                 item_id = self.tree.insert(
                     "",
                     "end",
-                    values=(cam.name, source, link, indicator, status, "\uf030"),
+                    values=(enabled_mark, cam.name, source, link, indicator, status, "\uf030"),
                     tags=tuple(merged_tags),
                 )
                 if selected and cam.name == selected:
@@ -536,6 +545,7 @@ class ManageView(ttk.Frame):
                     stream_path="",
                     source="device",
                     device_index=index,
+                    enabled=cam.enabled,
                 )
             else:
                 rtsp_url = url_var.get().strip()
@@ -551,6 +561,7 @@ class ManageView(ttk.Frame):
                     stream_path="",
                     source="rtsp",
                     rtsp_url=rtsp_url,
+                    enabled=cam.enabled,
                 )
             self.camera_manager.update_camera(name, new_config, start_worker=False)
             self._trigger_single_check(new_name)
@@ -589,7 +600,7 @@ class ManageView(ttk.Frame):
         if not selection:
             return None
         values = self.tree.item(selection[0], "values")
-        return values[0] if values else None
+        return values[1] if values else None
 
 
     def _start_connection_checks(self) -> None:
@@ -601,6 +612,12 @@ class ManageView(ttk.Frame):
     def _enqueue_checks(self, names: list[str]) -> None:
         with self._pending_lock:
             for name in names:
+                try:
+                    if not self.camera_manager.get_camera(name).enabled:
+                        self._set_status(name, "disabled")
+                        continue
+                except KeyError:
+                    continue
                 if name not in self._pending_checks:
                     self._pending_checks.append(name)
         if self._check_thread is None or not self._check_thread.is_alive():
@@ -618,6 +635,9 @@ class ManageView(ttk.Frame):
             try:
                 cam = self.camera_manager.get_camera(name)
             except KeyError:
+                continue
+            if not cam.enabled:
+                self._set_status(cam.name, "disabled")
                 continue
             self._set_status(cam.name, "checking")
             cameras.append(cam)
@@ -669,6 +689,8 @@ class ManageView(ttk.Frame):
             return "\u2716"
         if status == "checking":
             return "\u27f3"
+        if status == "disabled":
+            return "\u26d4"
         return "\u25cf"
 
     def _passes_filter(self, name: str, status: str) -> bool:
@@ -695,9 +717,21 @@ class ManageView(ttk.Frame):
             self.tree.selection_remove(self.tree.selection())
             return
         column = self.tree.identify_column(event.x)
-        if column == "#6":
+        if column == "#1":
             values = self.tree.item(row_id, "values")
             if values:
-                name = values[0]
+                name = values[1]
+                try:
+                    cam = self.camera_manager.get_camera(name)
+                except KeyError:
+                    return
+                new_enabled = not cam.enabled
+                self.camera_manager.set_camera_enabled(name, new_enabled)
+                self._refresh_camera_list()
+            return
+        if column == "#7":
+            values = self.tree.item(row_id, "values")
+            if values:
+                name = values[1]
                 camera = self.camera_manager.get_camera(name)
                 open_live(self, camera)

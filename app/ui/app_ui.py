@@ -6,6 +6,7 @@ from app.config.models import AppConfig
 from app.config.store import ConfigStore
 from app.core.camera_manager import CameraManager
 from app.core.recorder_manager import RecorderManager
+from app.ui.edit_view import EditView
 from app.ui.live_view import LiveView
 from app.ui.manage_view import ManageView
 from app.ui.recorder_view import RecorderView
@@ -78,6 +79,9 @@ class AppUI:
 
         self.menu_bar = ttk.Frame(container)
         self.menu_bar.pack(fill=tk.X, pady=(10, 12))
+        style = ttk.Style(self.menu_bar)
+        style.configure("MenuBar.TFrame", background="#c9d9ee")
+        self.menu_bar.configure(style="MenuBar.TFrame")
 
         self.active_tab = tk.StringVar(value="Manage")
         ttk.Button(
@@ -95,6 +99,11 @@ class AppUI:
             text="Liveview",
             command=lambda: self._set_tab("Liveview"),
         ).pack(side=tk.LEFT)
+        ttk.Button(
+            self.menu_bar,
+            text="Edit",
+            command=lambda: self._set_tab("Edit"),
+        ).pack(side=tk.LEFT, padx=(8, 0))
 
         self.content = ttk.Frame(container)
         self.content.pack(fill=tk.BOTH, expand=True)
@@ -111,6 +120,7 @@ class AppUI:
             self.recorder_manager,
             on_fullscreen_toggle=self._on_liveview_fullscreen,
         )
+        self.edit_view = EditView(self.content)
 
         self.manage_view.pack(fill=tk.BOTH, expand=True)
 
@@ -118,10 +128,13 @@ class AppUI:
         self.manage_view.pack_forget()
         self.recorder_view.pack_forget()
         self.live_view.pack_forget()
+        self.edit_view.pack_forget()
         if tab_name == "Manage":
             self.manage_view.pack(fill=tk.BOTH, expand=True)
         elif tab_name == "Recorder":
             self.recorder_view.pack(fill=tk.BOTH, expand=True)
+        elif tab_name == "Edit":
+            self.edit_view.pack(fill=tk.BOTH, expand=True)
         else:
             self.live_view.pack(fill=tk.BOTH, expand=True)
 

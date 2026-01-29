@@ -2,12 +2,12 @@ import logging
 import threading
 import time
 from typing import Callable, Optional
-from urllib.parse import quote
 
 import cv2
 
 from app.config.models import CameraConfig, CameraRuntimeState
 from app.core.frame_store import FrameStore
+from app.utils.rtsp import build_rtsp_url
 
 
 class CameraWorker(threading.Thread):
@@ -17,6 +17,8 @@ class CameraWorker(threading.Thread):
         runtime: CameraRuntimeState,
         frame_store: FrameStore,
         stop_event: threading.Event,
+        min_backoff_s: float = 0.5,
+        max_backoff_s: float = 30.0,
         status_callback: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         super().__init__(daemon=True)
@@ -24,16 +26,11 @@ class CameraWorker(threading.Thread):
         self.runtime = runtime
         self.frame_store = frame_store
         self.stop_event = stop_event
+        self._min_backoff_s = float(min_backoff_s)
+        self._max_backoff_s = float(max_backoff_s)
+        self._reconnect_attempts = 0
         self.status_callback = status_callback
         self.logger = logging.getLogger(f"CameraWorker[{config.name}]")
-
-    def build_rtsp_url(self) -> str:
-        if self.config.rtsp_url:
-            return self.config.rtsp_url
-        user = quote(self.config.user, safe="")
-        password = quote(self.config.password, safe="")
-        auth = f"{user}:{password}@" if user or password else ""
-        return f"rtsp://{auth}{self.config.ip}:{self.config.port}{self.config.stream_path}"
 
     def set_status(self, status: str, error: str = "") -> None:
         self.runtime.status = status
@@ -41,37 +38,56 @@ class CameraWorker(threading.Thread):
         if self.status_callback:
             self.status_callback(self.config.name, status)
 
+    def _open_capture(self) -> cv2.VideoCapture:
+        if self.config.source == "device":
+            self.logger.info("Opening device index %s", self.config.device_index)
+            return cv2.VideoCapture(self.config.device_index)
+        url = build_rtsp_url(self.config)
+        self.logger.info("Connecting to %s", url)
+        return cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+
+    def _read_frame(self, cap: cv2.VideoCapture) -> Optional[cv2.Mat]:
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            return None
+        return frame
+
+    def _sleep_backoff(self, backoff: float) -> float:
+        time.sleep(backoff)
+        return min(backoff * 2, self._max_backoff_s)
+
     def run(self) -> None:
-        backoff = 1.0
+        backoff = self._min_backoff_s
         while not self.stop_event.is_set():
-            if self.config.source == "device":
-                self.logger.info("Opening device index %s", self.config.device_index)
-                cap = cv2.VideoCapture(self.config.device_index)
-            else:
-                url = self.build_rtsp_url()
-                self.logger.info("Connecting to %s", url)
-                cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+            cap = self._open_capture()
             if not cap.isOpened():
                 self.set_status("Offline", "Open failed")
-                self.logger.warning("Open failed; retry in %.1fs", backoff)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                self._reconnect_attempts += 1
+                self.logger.warning(
+                    "Open failed; retry #%s in %.1fs", self._reconnect_attempts, backoff
+                )
+                backoff = self._sleep_backoff(backoff)
                 continue
 
             self.set_status("Online")
-            backoff = 1.0
+            backoff = self._min_backoff_s
+            self._reconnect_attempts = 0
 
             while not self.stop_event.is_set():
-                ok, frame = cap.read()
-                if not ok or frame is None:
+                frame = self._read_frame(cap)
+                if frame is None:
                     self.set_status("Offline", "Read failed")
-                    self.logger.warning("Read failed; reconnect")
+                    self._reconnect_attempts += 1
+                    self.logger.warning(
+                        "Read failed; reconnect #%s", self._reconnect_attempts
+                    )
                     break
 
                 self.runtime.last_frame_ts = time.time()
-                self.frame_store.set_frame(self.config.name, frame)
+                self.frame_store.set_frame(
+                    self.config.name, frame, self.runtime.last_frame_ts
+                )
 
             cap.release()
             if not self.stop_event.is_set():
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                backoff = self._sleep_backoff(backoff)

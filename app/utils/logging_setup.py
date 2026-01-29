@@ -1,12 +1,10 @@
 import logging
 from logging.handlers import RotatingFileHandler
 
-from app.utils.paths import get_log_dir, get_videos_dir, migrate_legacy_files, migrate_media_layout
+from app.utils.paths import get_log_dir, get_videos_dir
 
 
 def ensure_dirs() -> None:
-    migrate_legacy_files()
-    migrate_media_layout()
     get_log_dir().mkdir(parents=True, exist_ok=True)
     get_videos_dir().mkdir(parents=True, exist_ok=True)
 
@@ -14,13 +12,18 @@ def ensure_dirs() -> None:
 def setup_logging() -> None:
     ensure_dirs()
     logger = logging.getLogger()
+    if logger.handlers:
+        return
     logger.setLevel(logging.INFO)
     log_path = get_log_dir() / "app.log"
-    handler = RotatingFileHandler(
-        log_path, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"
-    )
     formatter = logging.Formatter(
         "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
     )
+    handler = RotatingFileHandler(
+        log_path, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    logger.addHandler(console)

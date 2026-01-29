@@ -17,8 +17,13 @@ SLOT_SPECS: Dict[int, Tuple[int, int, int, int]] = {
 class ViewComposer:
     def __init__(self, canvas_size: Tuple[int, int] = (1920, 1080)) -> None:
         self.canvas_w, self.canvas_h = canvas_size
+        self._placeholder_cache: Dict[Tuple[int, int, str], np.ndarray] = {}
 
     def placeholder(self, width: int, height: int, label: str) -> np.ndarray:
+        key = (width, height, label)
+        cached = self._placeholder_cache.get(key)
+        if cached is not None:
+            return cached.copy()
         frame = np.full((height, width, 3), 30, dtype=np.uint8)
         cv2.putText(
             frame,
@@ -30,7 +35,8 @@ class ViewComposer:
             2,
             cv2.LINE_AA,
         )
-        return frame
+        self._placeholder_cache[key] = frame
+        return frame.copy()
 
     def compose(
         self,
@@ -41,12 +47,14 @@ class ViewComposer:
         for slot, (x, y, w, h) in SLOT_SPECS.items():
             name = assignments.get(slot)
             if name and name in frames:
-                src = frames[name]
-                resized = cv2.resize(src, (w, h))
-                canvas[y : y + h, x : x + w] = resized
+                canvas[y : y + h, x : x + w] = self._resize_slot(frames[name], w, h)
             else:
                 canvas[y : y + h, x : x + w] = self.placeholder(w, h, f"Slot {slot+1}")
         return canvas
+
+    @staticmethod
+    def _resize_slot(frame: np.ndarray, width: int, height: int) -> np.ndarray:
+        return cv2.resize(frame, (width, height))
 
     def slot_at(self, x: int, y: int) -> Optional[int]:
         for slot, (sx, sy, w, h) in SLOT_SPECS.items():

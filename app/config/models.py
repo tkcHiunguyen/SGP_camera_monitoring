@@ -24,6 +24,13 @@ class AppConfig:
     fps_detect: int = 5
     days_keep: int = 7
     min_free_gb: int = 10
+    enable_disk_check: bool = True
+    enable_disk_quota: bool = True
+    enable_retention: bool = True
+    files_dir: str = "Files"
+    cam_reconnect_min_s: float = 0.5
+    cam_reconnect_max_s: float = 30.0
+    cam_stale_s: float = 5.0
     yolo: YoloConfig = field(default_factory=YoloConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
 
@@ -40,6 +47,7 @@ class CameraConfig:
     source: str = "rtsp"
     rtsp_url: str = ""
     device_index: int = 0
+    enabled: bool = True
 
 
 @dataclass
@@ -48,6 +56,7 @@ class CameraRuntimeState:
     last_error: str = ""
     last_frame_ts: float = 0.0
     mode: str = "Continuous"
+    enabled: bool = True
 
 
 @dataclass
