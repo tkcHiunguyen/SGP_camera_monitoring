@@ -1,6 +1,6 @@
 import os
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, messagebox, ttk
 
 from app.config.models import AppConfig
 from app.config.store import ConfigStore
@@ -10,6 +10,9 @@ from app.ui.edit_view import EditView
 from app.ui.live_view import LiveView
 from app.ui.manage_view import ManageView
 from app.ui.recorder_view import RecorderView
+from app.ui.settings_view import SettingsView
+from app.ui.theme import apply_theme
+from app.utils.paths import set_files_dir
 
 
 class AppUI:
@@ -63,10 +66,12 @@ class AppUI:
         y = max(0, (screen_h - height) // 2) - 100
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
-        container = ttk.Frame(self.root, padding=0)
+        apply_theme(self.root)
+
+        container = ttk.Frame(self.root, padding=0, style="App.TFrame")
         container.pack(fill=tk.BOTH, expand=True)
 
-        self.header_frame = ttk.Frame(container)
+        self.header_frame = ttk.Frame(container, style="App.TFrame")
         self.header_frame.pack(fill=tk.X)
         ttk.Label(
             self.header_frame, text="\uf030", font=("Font Awesome 6 Free Solid", 16)
@@ -77,33 +82,45 @@ class AppUI:
             self.header_frame, text="Camera Recorder", font=("Bai Jamjuree", 18, "bold")
         ).pack(side=tk.LEFT)
 
-        self.menu_bar = ttk.Frame(container)
+        self.menu_bar = ttk.Frame(container, style="App.Menu.TFrame")
         self.menu_bar.pack(fill=tk.X, pady=(10, 12))
-        style = ttk.Style(self.menu_bar)
-        style.configure("MenuBar.TFrame", background="#c9d9ee")
-        self.menu_bar.configure(style="MenuBar.TFrame")
-
         self.active_tab = tk.StringVar(value="Manage")
-        ttk.Button(
+        self._menu_buttons = {}
+        self._menu_buttons["Manage"] = ttk.Button(
             self.menu_bar,
             text="Manage Cameras",
             command=lambda: self._set_tab("Manage"),
-        ).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(
+            style="App.Menu.Active.TButton",
+        )
+        self._menu_buttons["Manage"].pack(side=tk.LEFT, padx=(0, 8))
+        self._menu_buttons["Recorder"] = ttk.Button(
             self.menu_bar,
             text="Recorder",
             command=lambda: self._set_tab("Recorder"),
-        ).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(
+            style="App.Menu.TButton",
+        )
+        self._menu_buttons["Recorder"].pack(side=tk.LEFT, padx=(0, 8))
+        self._menu_buttons["Liveview"] = ttk.Button(
             self.menu_bar,
             text="Liveview",
             command=lambda: self._set_tab("Liveview"),
-        ).pack(side=tk.LEFT)
-        ttk.Button(
+            style="App.Menu.TButton",
+        )
+        self._menu_buttons["Liveview"].pack(side=tk.LEFT)
+        self._menu_buttons["Edit"] = ttk.Button(
             self.menu_bar,
             text="Edit",
             command=lambda: self._set_tab("Edit"),
-        ).pack(side=tk.LEFT, padx=(8, 0))
+            style="App.Menu.TButton",
+        )
+        self._menu_buttons["Edit"].pack(side=tk.LEFT, padx=(8, 0))
+        self._menu_buttons["Settings"] = ttk.Button(
+            self.menu_bar,
+            text="Settings",
+            command=lambda: self._set_tab("Settings"),
+            style="App.Menu.TButton",
+        )
+        self._menu_buttons["Settings"].pack(side=tk.LEFT, padx=(8, 0))
 
         self.content = ttk.Frame(container)
         self.content.pack(fill=tk.BOTH, expand=True)
@@ -121,6 +138,9 @@ class AppUI:
             on_fullscreen_toggle=self._on_liveview_fullscreen,
         )
         self.edit_view = EditView(self.content)
+        self.settings_view = SettingsView(
+            self.content, self.app_config, self.config_store, self.camera_manager
+        )
 
         self.manage_view.pack(fill=tk.BOTH, expand=True)
 
@@ -129,14 +149,21 @@ class AppUI:
         self.recorder_view.pack_forget()
         self.live_view.pack_forget()
         self.edit_view.pack_forget()
+        self.settings_view.pack_forget()
         if tab_name == "Manage":
             self.manage_view.pack(fill=tk.BOTH, expand=True)
         elif tab_name == "Recorder":
             self.recorder_view.pack(fill=tk.BOTH, expand=True)
         elif tab_name == "Edit":
             self.edit_view.pack(fill=tk.BOTH, expand=True)
+        elif tab_name == "Settings":
+            self.settings_view.pack(fill=tk.BOTH, expand=True)
         else:
             self.live_view.pack(fill=tk.BOTH, expand=True)
+        for name, btn in self._menu_buttons.items():
+            btn.configure(
+                style="App.Menu.Active.TButton" if name == tab_name else "App.Menu.TButton"
+            )
 
     def _on_liveview_fullscreen(self, fullscreen: bool) -> None:
         if fullscreen:
@@ -147,3 +174,17 @@ class AppUI:
             self.root.attributes("-fullscreen", False)
             self.header_frame.pack(before=self.content, fill=tk.X)
             self.menu_bar.pack(before=self.content, fill=tk.X, pady=(10, 12))
+
+    def _open_storage_settings(self) -> None:
+        current = self.app_config.files_dir or ""
+        selected = filedialog.askdirectory(
+            title="Choose storage folder",
+            initialdir=current if current else None,
+            mustexist=False,
+        )
+        if not selected:
+            return
+        self.app_config.files_dir = selected
+        set_files_dir(selected)
+        self.config_store.save(self.app_config, self.camera_manager.list_cameras())
+        messagebox.showinfo("Storage updated", f"Files will be saved to:\n{selected}")

@@ -8,6 +8,7 @@ from app.core.recorder_manager import RecorderManager
 from app.ui.job_dialog import JobDialog
 from app.ui.stop_jobs_dialog import StopJobsDialog
 from app.ui.live_actions import open_live
+from app.ui.widgets.empty_state import EmptyState
 
 
 class RecorderView(ttk.Frame):
@@ -42,32 +43,52 @@ class RecorderView(ttk.Frame):
         )
         style.configure("Recorder.CardHeader.TCheckbutton", background="#dbe4f0")
 
-        recorder_bar = ttk.Frame(self)
+        recorder_bar = ttk.Frame(self, style="App.TFrame")
         recorder_bar.pack(fill=tk.X, padx=8, pady=(12, 6))
 
         ttk.Label(
-            recorder_bar, text="Recorder", font=("Bai Jamjuree", 12, "bold")
+            recorder_bar, text="Recorder", style="App.Title.TLabel"
         ).pack(side=tk.LEFT)
 
         ttk.Button(
             recorder_bar,
             text="Create recorder job",
             command=self._open_create_job_dialog,
+            style="App.Toolbar.AccentText.TButton",
         ).pack(side=tk.RIGHT)
 
-        self.selection_bar = ttk.Frame(self)
+        self.selection_bar = ttk.Frame(self, style="App.TFrame")
         self.selection_bar.pack(fill=tk.X, padx=8, pady=(0, 6))
         self.selected_label = ttk.Label(
-            self.selection_bar, text="Selected: 0", font=("Bai Jamjuree", 11)
+            self.selection_bar, text="Selected: 0", style="App.TLabel"
         )
         self.selected_label.pack(side=tk.LEFT)
         self.stop_all_button = ttk.Button(
-            self.selection_bar, text="Stop selected", command=self._stop_selected
+            self.selection_bar,
+            text="Stop selected",
+            command=self._stop_selected,
+            style="App.Toolbar.TButton",
         )
         self.stop_all_button.pack(side=tk.RIGHT)
         self.stop_all_button.pack_forget()
+        self.select_all_button = ttk.Button(
+            self.selection_bar,
+            text="Select all",
+            command=self._select_all_jobs,
+            style="App.Toolbar.TButton",
+        )
+        self.select_all_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.select_all_button.pack_forget()
+        self.clear_all_button = ttk.Button(
+            self.selection_bar,
+            text="Clear",
+            command=self._clear_all_jobs,
+            style="App.Toolbar.TButton",
+        )
+        self.clear_all_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.clear_all_button.pack_forget()
 
-        self.jobs_container = ttk.Frame(self)
+        self.jobs_container = ttk.Frame(self, style="App.TFrame")
         self.jobs_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 16))
         self.jobs_canvas = tk.Canvas(self.jobs_container, highlightthickness=0)
         self.jobs_scroll = ttk.Scrollbar(
@@ -90,12 +111,15 @@ class RecorderView(ttk.Frame):
         self.jobs_frame.bind("<MouseWheel>", self._on_mousewheel)
         self.jobs_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
         self.jobs_canvas.bind("<Configure>", self._on_canvas_configure)
-        self.empty_jobs = ttk.Label(
+        self.empty_state = EmptyState(
             self,
-            text="No active recorder jobs yet.",
-            font=("Bai Jamjuree", 12),
+            title="No recorder jobs",
+            message="Create a recorder job to start saving footage automatically.",
+            icon="\uf03d",
+            action_text="Create recorder job",
+            action=self._open_create_job_dialog,
         )
-        self.empty_jobs.pack_forget()
+        self.empty_state.pack_forget()
 
     def _refresh_jobs(self) -> None:
         jobs = self.recorder_manager.list_jobs()
@@ -111,9 +135,9 @@ class RecorderView(ttk.Frame):
 
         if not jobs:
             self.jobs_container.pack_forget()
-            self.empty_jobs.pack(pady=(0, 16))
+            self.empty_state.pack(fill=tk.BOTH, expand=True, pady=(0, 16))
         else:
-            self.empty_jobs.pack_forget()
+            self.empty_state.pack_forget()
             self.jobs_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 16))
             for job in jobs:
                 camera = self.camera_manager.get_camera(job.camera_name)
@@ -290,7 +314,8 @@ class RecorderView(ttk.Frame):
         self.jobs_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _on_canvas_configure(self, event: tk.Event) -> None:
-        self.jobs_canvas.itemconfigure(self._jobs_window, width=event.width)
+        scroll_w = self.jobs_scroll.winfo_width()
+        self.jobs_canvas.itemconfigure(self._jobs_window, width=max(0, event.width - scroll_w))
         self._layout_cards()
 
     def _is_over_jobs(self, widget: tk.Misc) -> bool:
@@ -313,8 +338,30 @@ class RecorderView(ttk.Frame):
         self.selected_label.config(text=f"Selected: {count}")
         if count > 0:
             self.stop_all_button.pack(side=tk.RIGHT)
+            self.clear_all_button.pack(side=tk.RIGHT, padx=(0, 8))
         else:
             self.stop_all_button.pack_forget()
+            self.clear_all_button.pack_forget()
+        if self._job_cards:
+            self.select_all_button.pack(side=tk.RIGHT, padx=(0, 8))
+        else:
+            self.select_all_button.pack_forget()
+
+    def _select_all_jobs(self) -> None:
+        for name, entry in self._job_cards.items():
+            var = entry.get("selected_var")
+            if isinstance(var, tk.BooleanVar):
+                var.set(True)
+            self._selected_jobs.add(name)
+        self._update_selection_ui()
+
+    def _clear_all_jobs(self) -> None:
+        for name, entry in self._job_cards.items():
+            var = entry.get("selected_var")
+            if isinstance(var, tk.BooleanVar):
+                var.set(False)
+        self._selected_jobs.clear()
+        self._update_selection_ui()
 
     def _stop_selected(self) -> None:
         if not self._selected_jobs:

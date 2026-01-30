@@ -44,11 +44,19 @@ def main() -> int:
         set_files_dir(Path(app_config.files_dir))
     setup_logging()
 
+    def resource_path(rel_path: str) -> Path:
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        return base / rel_path
+
     root = tk.Tk()
     try:
-        icon_path = Path("assets") / "logo" / "logo_cam.png"
-        icon_img = tk.PhotoImage(file=str(icon_path))
-        root.iconphoto(True, icon_img)
+        icon_png = resource_path("assets/logo/logo_cam.png")
+        if icon_png.exists():
+            icon_img = tk.PhotoImage(file=str(icon_png))
+            root.iconphoto(True, icon_img)
+        icon_ico = resource_path("assets/logo/logo_cam.ico")
+        if icon_ico.exists():
+            root.iconbitmap(str(icon_ico))
     except Exception:
         pass
     frame_store = FrameStore()

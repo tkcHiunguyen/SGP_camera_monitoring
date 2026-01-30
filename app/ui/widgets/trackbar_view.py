@@ -7,15 +7,15 @@ class TrackbarView(tk.Frame):
         self._current_label = tk.Label(
             self, text="00:00", fg="#e5e7eb", bg="#111111", font=("Bai Jamjuree", 10)
         )
-        self._current_label.pack(side=tk.LEFT, padx=(pad_left, 8), pady=(10, 0))
-        self._canvas = tk.Canvas(self, height=36, highlightthickness=0, bg="#111111")
+        self._current_label.pack(side=tk.LEFT, padx=(pad_left, 8), pady=(4, 0))
+        self._canvas = tk.Canvas(self, height=28, highlightthickness=0, bg="#111111")
         self._canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self._canvas.bind("<Enter>", lambda _e: self._canvas.configure(cursor="hand2"))
         self._canvas.bind("<Leave>", lambda _e: self._canvas.configure(cursor=""))
         self._duration_label = tk.Label(
             self, text="00:00", fg="#e5e7eb", bg="#111111", font=("Bai Jamjuree", 10)
         )
-        self._duration_label.pack(side=tk.RIGHT, padx=(8, pad_right), pady=(10, 0))
+        self._duration_label.pack(side=tk.RIGHT, padx=(8, pad_right), pady=(4, 0))
         self._on_seek = None
         self._trim_visible = False
         self._trim_start = 0.2
@@ -64,7 +64,7 @@ class TrackbarView(tk.Frame):
                 end_time = self._fmt_time(self._trim_end * self._duration_seconds)
                 start_text = self._canvas.create_text(
                     start_x,
-                    bar_y - (self._handle_radius + 10),
+                    bar_y + (self._handle_radius + 12),
                     text=start_time,
                     fill="#e2e8f0",
                     font=("Bai Jamjuree", 10, "bold"),
@@ -72,12 +72,13 @@ class TrackbarView(tk.Frame):
                 )
                 end_text = self._canvas.create_text(
                     end_x,
-                    bar_y - (self._handle_radius + 10),
+                    bar_y + (self._handle_radius + 12),
                     text=end_time,
                     fill="#e2e8f0",
                     font=("Bai Jamjuree", 10, "bold"),
                     tags=("trim_label",),
                 )
+                label_items = []
                 for text_id in (start_text, end_text):
                     bbox = self._canvas.bbox(text_id)
                     if bbox is None:
@@ -93,6 +94,9 @@ class TrackbarView(tk.Frame):
                         width=1,
                     )
                     self._canvas.tag_lower(rect, text_id)
+                    label_items.extend([rect, text_id])
+                if label_items:
+                    self._canvas.tag_raise("trim_label")
             self._canvas.create_oval(
                 start_x - self._handle_radius,
                 bar_y - (self._handle_radius + 1),

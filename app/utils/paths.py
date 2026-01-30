@@ -16,7 +16,10 @@ def get_files_dir() -> Path:
 
 def set_files_dir(path: Path | str) -> None:
     global _FILES_DIR_OVERRIDE
-    _FILES_DIR_OVERRIDE = Path(path)
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = get_base_dir() / resolved
+    _FILES_DIR_OVERRIDE = resolved
 
 
 def get_config_dir() -> Path:

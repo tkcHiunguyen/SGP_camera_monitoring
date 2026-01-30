@@ -12,7 +12,7 @@ class EditToolbar(tk.Frame):
         on_save,
         *,
         bg: str = "#0f172a",
-        width: int = 250,
+        width: int = 200,
     ) -> None:
         super().__init__(parent, bg=bg, width=width)
         self.pack_propagate(False)
@@ -22,7 +22,7 @@ class EditToolbar(tk.Frame):
         self._open_btn = ttk.Button(
             content, text="Open File", command=on_open, style="Edit.Open.TButton"
         )
-        self._open_btn.pack(anchor="n", padx=0, pady=0)
+        self._open_btn.pack(fill=tk.X, padx=10, pady=(6, 0))
         self._bind_cursor(self._open_btn)
 
         self._trim_btn = ttk.Button(
@@ -32,7 +32,7 @@ class EditToolbar(tk.Frame):
             style="Edit.Open.Disabled.TButton",
             state="disabled",
         )
-        self._trim_btn.pack(anchor="n", padx=0, pady=(6, 0))
+        self._trim_btn.pack(fill=tk.X, padx=10, pady=(8, 0))
         self._bind_cursor(self._trim_btn)
         self._apply_toggle_button_style(self._trim_btn, enabled=False, on=False)
 
@@ -43,14 +43,14 @@ class EditToolbar(tk.Frame):
             style="Edit.Open.Disabled.TButton",
             state="disabled",
         )
-        self._crop_btn.pack(anchor="n", padx=0, pady=(6, 0))
+        self._crop_btn.pack(fill=tk.X, padx=10, pady=(8, 0))
         self._bind_cursor(self._crop_btn)
         self._apply_toggle_button_style(self._crop_btn, enabled=False, on=False)
 
         self._save_btn = ttk.Button(
             content, text="Save", command=on_save, style="Edit.Open.TButton"
         )
-        self._save_btn.pack(anchor="n", padx=0, pady=(8, 0))
+        self._save_btn.pack(fill=tk.X, padx=10, pady=(10, 0))
         self._bind_cursor(self._save_btn)
         self._save_btn.pack_forget()
         self._save_visible = False
@@ -71,7 +71,7 @@ class EditToolbar(tk.Frame):
 
     def show_save(self, visible: bool) -> None:
         if visible and not self._save_visible:
-            self._save_btn.pack(anchor="n", padx=0, pady=(8, 0))
+            self._save_btn.pack(fill=tk.X, padx=10, pady=(10, 0))
             self._save_visible = True
         elif not visible and self._save_visible:
             self._save_btn.pack_forget()

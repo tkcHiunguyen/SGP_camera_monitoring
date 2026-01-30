@@ -14,6 +14,7 @@ import unicodedata
 
 from app.core.camera_manager import CameraManager
 from app.core.recorder_manager import RecorderManager
+from app.ui.widgets.empty_state import EmptyState
 
 
 class LiveView(ttk.Frame):
@@ -30,6 +31,7 @@ class LiveView(ttk.Frame):
         self.selected: dict[str, tk.BooleanVar] = {}
         self.page_index = 0
         self.page_size = 9
+        self._layout_mode = "Auto"
         self.view_size = (800, 520)
         self.tile_labels: list[ttk.Label] = []
         self._latest_frames: dict[str, tuple[np.ndarray, int]] = {}
@@ -47,6 +49,9 @@ class LiveView(ttk.Frame):
         self._left_panel: ttk.Frame | None = None
         self._right_panel: ttk.Frame | None = None
         self._toolbar: ttk.Frame | None = None
+        self._layout_button: ttk.Button | None = None
+        self._layout_popup: tk.Toplevel | None = None
+        self._layout_previews: dict[str, ImageTk.PhotoImage] = {}
         self._sidebar_toggle_btn: ttk.Button | None = None
         self._sidebar_show_btn: ttk.Button | None = None
         self._fullscreen_exit_btn: ttk.Button | None = None
@@ -67,35 +72,44 @@ class LiveView(ttk.Frame):
         self._on_fullscreen_toggle = on_fullscreen_toggle
         self._build_ui()
         self._refresh_camera_list()
+        self._load_layout_previews()
         self._update_preview_quality()
         self._render_view()
         self.after(self._queue_poll_ms, self._poll_frame_queue)
 
     def _build_ui(self) -> None:
-        container = ttk.Frame(self)
+        container = ttk.Frame(self, style="App.TFrame")
         container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
         self._container = container
 
-        left_panel = ttk.Frame(container, width=170)
+        left_panel = ttk.Frame(container, width=170, style="App.TFrame")
         left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
         left_panel.pack_propagate(False)
         self._left_panel = left_panel
 
-        sidebar_header = ttk.Frame(left_panel)
+        sidebar_header = ttk.Frame(left_panel, style="App.TFrame")
         sidebar_header.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(
-            sidebar_header, text="Select Cameras", font=("Bai Jamjuree", 12, "bold")
-        ).pack(side=tk.LEFT, anchor="w")
+        ttk.Label(sidebar_header, text="Select Cameras", style="App.Title.TLabel").pack(
+            side=tk.LEFT, anchor="w"
+        )
 
         self.select_all_btn = ttk.Button(
-            left_panel, text="Select all", command=self._select_all
+            left_panel,
+            text="Select all",
+            command=self._select_all,
+            style="App.Toolbar.TButton",
         )
         self.select_all_btn.pack(fill=tk.X, pady=(0, 6))
-        self.clear_btn = ttk.Button(left_panel, text="Clear", command=self._clear_all)
+        self.clear_btn = ttk.Button(
+            left_panel,
+            text="Clear",
+            command=self._clear_all,
+            style="App.Toolbar.TButton",
+        )
         self.clear_btn.pack(fill=tk.X, pady=(0, 10))
 
         style = ttk.Style(self)
-        theme_bg = style.lookup("TFrame", "background")
+        theme_bg = style.lookup("App.TFrame", "background")
         if isinstance(theme_bg, str) and theme_bg.startswith("#"):
             self._list_bg = theme_bg
             self._toolbar_bg = theme_bg
@@ -107,7 +121,7 @@ class LiveView(ttk.Frame):
             left_panel,
             show="tree",
             selectmode="none",
-            style="Liveview.Treeview",
+            style="App.Treeview",
         )
         self.list_tree.tag_configure(
             "hover", background=self._list_hover_bg, foreground=self._list_fg
@@ -138,16 +152,23 @@ class LiveView(ttk.Frame):
         self.list_tree.bind("<Leave>", self._clear_tree_hover, add="+")
         self.list_tree.bind("<Button-1>", self._on_tree_click)
 
-        right_panel = ttk.Frame(container)
+        right_panel = ttk.Frame(container, style="App.TFrame")
         right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._right_panel = right_panel
         right_panel.bind("<Configure>", self._on_panel_resize)
 
-        toolbar = ttk.Frame(right_panel)
+        toolbar = ttk.Frame(right_panel, style="App.TFrame")
         toolbar.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
         self._toolbar = toolbar
-        self.page_label = ttk.Label(toolbar, text="Page 1/1")
+        self.page_label = ttk.Label(toolbar, text="Page 1/1", style="App.TLabel")
         self.page_label.pack(side=tk.LEFT)
+        self._layout_button = ttk.Button(
+            toolbar,
+            text="Layout: Auto",
+            style="App.Toolbar.TButton",
+            command=self._open_layout_popup,
+        )
+        self._layout_button.pack(side=tk.LEFT, padx=(10, 0))
         style.configure(
             "Liveview.Fullscreen.TButton", font=("Font Awesome 6 Free Solid", 11)
         )
@@ -209,15 +230,17 @@ class LiveView(ttk.Frame):
         self._sidebar_toggle_btn.pack(side=tk.RIGHT)
 
         self.view_canvas = tk.Canvas(right_panel, highlightthickness=0, bg="#111111")
-        self.view_canvas.pack(fill=tk.BOTH, expand=True)
         self.view_canvas.bind("<Configure>", self._on_view_resize)
         self.bind("<Destroy>", lambda e: self._shutdown_captures())
 
-        self.empty_label = ttk.Label(
+        self.empty_state = EmptyState(
             right_panel,
-            text="Select camera(s) to view.",
-            font=("Bai Jamjuree", 12),
+            title="No live view yet",
+            message="Select one or more cameras from the left to start monitoring.",
+            icon="\uf03d",
         )
+        self.empty_state.pack(fill=tk.BOTH, expand=True, pady=(6, 6))
+        self.view_canvas.pack_forget()
         self._fs_prev_btn = tk.Button(
             right_panel,
             text="\uf104",
@@ -594,6 +617,161 @@ class LiveView(ttk.Frame):
             return (3, 2)
         return (3, 3)
 
+    def _set_layout(self, mode: str) -> None:
+        self._layout_mode = mode
+        if self._layout_button is not None:
+            self._layout_button.configure(text=f"Layout: {mode}")
+        if mode == "1x1":
+            self.page_size = 1
+        elif mode == "2x1":
+            self.page_size = 2
+        elif mode == "2x2":
+            self.page_size = 4
+        elif mode == "3x3":
+            self.page_size = 9
+        elif mode == "6x":
+            self.page_size = 6
+        else:
+            self.page_size = 9
+        self.page_index = 0
+        self._render_view()
+
+    def _open_layout_popup(self) -> None:
+        if self._layout_popup is not None and self._layout_popup.winfo_exists():
+            self._layout_popup.lift()
+            return
+        if self._layout_button is None:
+            return
+        popup = tk.Toplevel(self)
+        popup.title("Select layout")
+        popup.transient(self.winfo_toplevel())
+        popup.resizable(False, False)
+        popup.configure(bg="#f8fafc")
+        popup.bind("<Escape>", lambda _e: popup.destroy())
+        popup.bind("<FocusOut>", lambda _e: popup.destroy())
+        self._layout_popup = popup
+
+        popup.update_idletasks()
+        screen_w = popup.winfo_screenwidth()
+        screen_h = popup.winfo_screenheight()
+        width = 520
+        height = 380
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 2)
+        popup.geometry(f"{width}x{height}+{x}+{y}")
+
+        container = tk.Frame(popup, bg="#f8fafc", padx=12, pady=12)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        title = tk.Label(
+            container,
+            text="Choose layout",
+            font=("Bai Jamjuree", 12, "bold"),
+            fg="#0f172a",
+            bg="#f8fafc",
+        )
+        title.pack(anchor="w", pady=(0, 8))
+
+        grid = tk.Frame(container, bg="#f8fafc")
+        grid.pack()
+
+        layouts = [
+            ("Auto", "Auto"),
+            ("1x1", "1x1"),
+            ("2x1", "2x1"),
+            ("2x2", "2x2"),
+            ("3x3", "3x3"),
+            ("6x", "6x"),
+        ]
+        for idx, (label, mode) in enumerate(layouts):
+            card = self._build_layout_card(grid, label, mode)
+            row = idx // 3
+            col = idx % 3
+            card.grid(row=row, column=col, padx=6, pady=6)
+
+    def _build_layout_card(self, parent: tk.Misc, label: str, mode: str) -> tk.Frame:
+        card = tk.Frame(parent, bg="#ffffff", bd=1, relief="solid", padx=4, pady=4)
+        preview_img = self._layout_previews.get(mode)
+        preview_bg = "#0b1220"
+        preview_hover = "#e5e7eb"
+        preview = tk.Label(card, bg=preview_bg, image=preview_img)
+        preview.pack()
+
+        btn = tk.Button(
+            card,
+            text=label if mode != "6x" else "6x (1 big + 5 small)",
+            font=("Bai Jamjuree", 9, "bold"),
+            fg="#2563eb",
+            bg="#ffffff",
+            activeforeground="#1d4ed8",
+            activebackground="#e2e8f0",
+            relief="flat",
+            padx=4,
+            pady=0,
+            command=lambda m=mode: self._select_layout(m),
+        )
+        btn.pack(pady=(4, 0))
+        card.bind("<Button-1>", lambda _e, m=mode: self._select_layout(m))
+        preview.bind("<Button-1>", lambda _e, m=mode: self._select_layout(m))
+        card.bind("<Enter>", lambda _e: preview.configure(bg=preview_hover))
+        card.bind("<Leave>", lambda _e: preview.configure(bg=preview_bg))
+        preview.bind("<Enter>", lambda _e: preview.configure(bg=preview_hover))
+        preview.bind("<Leave>", lambda _e: preview.configure(bg=preview_bg))
+        return card
+
+    def _select_layout(self, mode: str) -> None:
+        self._set_layout(mode)
+        if self._layout_popup is not None and self._layout_popup.winfo_exists():
+            self._layout_popup.destroy()
+        self._layout_popup = None
+
+    def _load_layout_previews(self) -> None:
+        if self._layout_previews:
+            return
+        base = Path(__file__).resolve().parents[2] / "assets" / "layouts"
+        mapping = {
+            "Auto": "layout_auto.png",
+            "1x1": "layout_1x1.png",
+            "2x1": "layout_2x1.png",
+            "2x2": "layout_2x2.png",
+            "3x3": "layout_3x3.png",
+            "6x": "layout_6x.png",
+        }
+        for key, filename in mapping.items():
+            path = base / filename
+            if not path.exists():
+                continue
+            img = Image.open(path)
+            img = img.resize((130, 74), Image.LANCZOS)
+            self._layout_previews[key] = ImageTk.PhotoImage(img)
+
+    def _layout_positions(
+        self, count: int, width: int, height: int
+    ) -> list[tuple[int, int, int, int]]:
+        if self._layout_mode == "6x":
+            w3 = max(1, width // 3)
+            h3 = max(1, height // 3)
+            return [
+                (0, 0, w3 * 2, h3 * 2),
+                (w3 * 2, 0, w3, h3),
+                (w3 * 2, h3, w3, h3),
+                (0, h3 * 2, w3, h3),
+                (w3, h3 * 2, w3, h3),
+                (w3 * 2, h3 * 2, w3, h3),
+            ][:count]
+        if self._layout_mode in {"1x1", "2x1", "2x2", "3x3"}:
+            rows, cols = self._grid_for_count(self.page_size)
+        else:
+            rows, cols = self._grid_for_count(count)
+        tile_w = max(1, width // cols)
+        tile_h = max(1, height // rows)
+        positions = []
+        for idx in range(count):
+            row = idx // cols
+            col = idx % cols
+            positions.append((col * tile_w, row * tile_h, tile_w, tile_h))
+        return positions
+
     def _update_preview_quality(self) -> None:
         count = len(self._get_selected_names())
         if count <= 1:
@@ -682,7 +860,15 @@ class LiveView(ttk.Frame):
             self.page_label.config(text="Page 0/0")
             self.prev_btn.config(state="disabled")
             self.next_btn.config(state="disabled")
+            if self.view_canvas.winfo_ismapped():
+                self.view_canvas.pack_forget()
+            if not self.empty_state.winfo_ismapped():
+                self.empty_state.pack(fill=tk.BOTH, expand=True, pady=(6, 6))
             return
+        if self.empty_state.winfo_ismapped():
+            self.empty_state.pack_forget()
+        if not self.view_canvas.winfo_ismapped():
+            self.view_canvas.pack(fill=tk.BOTH, expand=True)
 
         max_page = max(0, (len(names) - 1) // self.page_size)
         if self.page_index > max_page:
@@ -690,17 +876,12 @@ class LiveView(ttk.Frame):
         start = self.page_index * self.page_size
         page_names = names[start : start + self.page_size]
 
-        rows, cols = self._grid_for_count(len(page_names))
         w, h = self.view_size
-        tile_w = max(1, w // cols)
-        tile_h = max(1, h // rows)
+        positions = self._layout_positions(len(page_names), w, h)
 
         self._ensure_tiles(len(page_names))
         for idx, name in enumerate(page_names):
-            row = idx // cols
-            col = idx % cols
-            x = col * tile_w
-            y = row * tile_h
+            x, y, tile_w, tile_h = positions[idx]
 
             frame_entry = self._latest_frames.get(name)
             if frame_entry is None:

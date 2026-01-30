@@ -7,8 +7,8 @@
     "min_free_gb": 10,
     "enable_disk_check": true,
     "enable_disk_quota": true,
-    "enable_retention": true,
-    "files_dir": "Files",
+    "enable_retention": false,
+    "files_dir": "D:\\tracking camera SGP\\Files",
     "cam_reconnect_min_s": 0.5,
     "cam_reconnect_max_s": 30.0,
     "cam_stale_s": 5.0,
@@ -19,10 +19,10 @@
       "stop_seconds": 5
     },
     "tracking": {
-      "enabled": true,
+      "enabled": false,
       "model_path": "models/yolo26n.pt",
       "conf_thres": 0.6,
-      "use_gpu": true
+      "use_gpu": false
     }
   }
 }

@@ -90,7 +90,7 @@
       "source": "rtsp",
       "rtsp_url": "rtsp://admin:bvTTDCaps999@hcv08bwvjn5.sn.mynetname.net:555/Streaming/Channels/3401",
       "device_index": 0,
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "ttd cam4",
@@ -103,7 +103,7 @@
       "source": "rtsp",
       "rtsp_url": "rtsp://admin:bvTTDCaps999@hcv08bwvjn5.sn.mynetname.net:555/Streaming/Channels/3601",
       "device_index": 0,
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "ttd cam6",
@@ -116,7 +116,7 @@
       "source": "rtsp",
       "rtsp_url": "rtsp://admin:bvTTDCaps999@hcv08bwvjn5.sn.mynetname.net:555/Streaming/Channels/3801",
       "device_index": 0,
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "ttd cam7",
@@ -129,7 +129,7 @@
       "source": "rtsp",
       "rtsp_url": "rtsp://admin:bvTTDCaps999@hcv08bwvjn5.sn.mynetname.net:555/Streaming/Channels/3901",
       "device_index": 0,
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "ttd cam3",
@@ -142,7 +142,7 @@
       "source": "rtsp",
       "rtsp_url": "rtsp://admin:bvTTDCaps999@hcv08bwvjn5.sn.mynetname.net:555/Streaming/Channels/3301",
       "device_index": 0,
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "ttd cu\u1ed1i L5",
@@ -155,7 +155,7 @@
       "source": "rtsp",
       "rtsp_url": "rtsp://admin:bvTTDCaps999@hcv08bwvjn5.sn.mynetname.net:555/Streaming/Channels/4801",
       "device_index": 0,
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "ttd cam5",

@@ -11,6 +11,7 @@ from app.config.models import CameraConfig
 from app.core.camera_manager import CameraManager
 from app.core.recorder_manager import RecorderManager
 from app.ui.live_actions import open_live
+from app.ui.widgets.empty_state import EmptyState
 
 
 class ManageView(ttk.Frame):
@@ -38,42 +39,50 @@ class ManageView(ttk.Frame):
         self._refresh_camera_list()
 
     def _build_ui(self) -> None:
-        manager_bar = ttk.Frame(self)
+        manager_bar = ttk.Frame(self, style="App.TFrame")
         manager_bar.pack(fill=tk.X, padx=8, pady=(8, 6))
 
         ttk.Label(
-            manager_bar, text="Manage Cameras", font=("Bai Jamjuree", 12, "bold")
+            manager_bar, text="Manage Cameras", style="App.Title.TLabel"
         ).pack(side=tk.LEFT)
 
         ttk.Button(
             manager_bar,
             text="Add new camera",
             command=self._open_add_camera_dialog,
+            style="App.Menu.Active.TButton",
         ).pack(side=tk.RIGHT)
         ttk.Button(
             manager_bar,
             text="Edit",
             command=self._open_edit_camera_dialog,
+            style="App.Toolbar.TButton",
         ).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Button(
             manager_bar,
             text="Delete",
             command=self._delete_selected_camera,
+            style="App.Toolbar.TButton",
         ).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Button(
             manager_bar,
             text="\u27f3 Refresh",
             command=self._refresh_connections,
+            style="App.Toolbar.TButton",
         ).pack(side=tk.RIGHT, padx=(0, 8))
 
-        toolbar = ttk.Frame(self)
+        toolbar = ttk.Frame(self, style="App.TFrame")
         toolbar.pack(fill=tk.X, padx=8, pady=(0, 6))
 
-        ttk.Label(toolbar, text="Search:").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(toolbar, text="Search:", style="App.TLabel").pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
         ttk.Entry(toolbar, textvariable=self.search_var, width=22).pack(
             side=tk.LEFT, padx=(0, 12)
         )
-        ttk.Label(toolbar, text="Filter:").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(toolbar, text="Filter:", style="App.TLabel").pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
         filter_box = ttk.Combobox(
             toolbar,
             textvariable=self.filter_var,
@@ -85,18 +94,22 @@ class ManageView(ttk.Frame):
         self.search_var.trace_add("write", lambda *_: self._refresh_camera_list())
         filter_box.bind("<<ComboboxSelected>>", lambda e: self._refresh_camera_list())
 
-        self.empty_label = ttk.Label(
+        self.empty_state = EmptyState(
             self,
-            text="No cameras yet. Please add a new camera.",
-            font=("Bai Jamjuree", 12),
+            title="No cameras yet",
+            message="Add your first camera to start recording and monitoring.",
+            icon="\uf03d",
+            action_text="Add new camera",
+            action=self._open_add_camera_dialog,
         )
-        self.empty_label.pack_forget()
+        self.empty_state.pack_forget()
 
         self.tree = ttk.Treeview(
             self,
             columns=("enabled", "name", "source", "link", "indicator", "status", "live"),
             show="headings",
             height=12,
+            style="App.Treeview",
         )
         self.tree.heading("enabled", text="Enable")
         self.tree.heading("name", text="Camera name")
@@ -126,9 +139,9 @@ class ManageView(ttk.Frame):
 
         if not cameras:
             self.tree.pack_forget()
-            self.empty_label.pack(pady=(12, 8))
+            self.empty_state.pack(fill=tk.BOTH, expand=True, pady=(6, 8))
         else:
-            self.empty_label.pack_forget()
+            self.empty_state.pack_forget()
             self.tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
             for cam in cameras:
                 source = "Device" if cam.source == "device" else "RTSP"
@@ -174,8 +187,8 @@ class ManageView(ttk.Frame):
         dialog.transient(self)
         dialog.resizable(False, False)
 
-        width = 640
-        height = 560
+        width = 740
+        height = 520
         x = self.winfo_rootx() + (self.winfo_width() - width) // 2
         y = self.winfo_rooty() + (self.winfo_height() - height) // 2
         dialog.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
@@ -210,6 +223,17 @@ class ManageView(ttk.Frame):
         body = ttk.Frame(dialog, padding=16, style="Modal.TFrame")
         body.pack(fill=tk.BOTH, expand=True)
 
+        header = ttk.Frame(body, style="Modal.TFrame")
+        header.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(
+            header, text="Add Camera", style="Modal.TLabel", font=("Bai Jamjuree", 14, "bold")
+        ).pack(anchor="w")
+        ttk.Label(
+            header,
+            text="Choose RTSP or Device, then provide connection details.",
+            style="Modal.TLabel",
+        ).pack(anchor="w", pady=(4, 0))
+
         source_var = tk.StringVar(value="rtsp")
         url_var = tk.StringVar()
         user_var = tk.StringVar()
@@ -238,16 +262,21 @@ class ManageView(ttk.Frame):
 
         ttk.Separator(body).pack(fill=tk.X, pady=(0, 12))
 
-        ttk.Label(body, text="Camera Name:", style="Modal.TLabel").pack(
-            anchor="w", pady=(0, 6)
+        form = ttk.Frame(body, style="Modal.TFrame")
+        form.pack(fill=tk.BOTH, expand=True)
+        form.columnconfigure(0, weight=1)
+        form.columnconfigure(1, weight=1)
+
+        ttk.Label(form, text="Camera Name:", style="Modal.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 6), padx=(0, 12)
         )
-        name_entry = ttk.Entry(body, textvariable=name_var, width=40)
-        name_entry.pack(anchor="w", pady=(0, 12))
+        name_entry = ttk.Entry(form, textvariable=name_var, width=34)
+        name_entry.grid(row=1, column=0, sticky="w", pady=(0, 12), padx=(0, 12))
 
         rtsp_group = ttk.Labelframe(
-            body, text="RTSP URL", padding=12, style="Modal.TLabelframe"
+            form, text="RTSP URL", padding=12, style="Modal.TLabelframe"
         )
-        rtsp_group.pack(fill=tk.X, pady=(0, 12))
+        rtsp_group.grid(row=2, column=0, sticky="nsew", pady=(0, 12), padx=(0, 12))
 
         ttk.Label(rtsp_group, text="RTSP URL:", style="Modal.TLabel").grid(
             row=0, column=0, sticky="w", pady=6, padx=(0, 8)
@@ -268,9 +297,10 @@ class ManageView(ttk.Frame):
         pass_entry.grid(row=2, column=1, sticky="w", pady=6)
 
         device_group = ttk.Labelframe(
-            body, text="Select Device", padding=12, style="Modal.TLabelframe"
+            form, text="Select Device", padding=12, style="Modal.TLabelframe"
         )
-        device_group.pack(fill=tk.X, pady=(0, 12))
+        device_group.grid(row=2, column=1, sticky="nsew", pady=(0, 12))
+        device_group.columnconfigure(1, weight=1)
 
         ttk.Label(device_group, text="Device:", style="Modal.TLabel").grid(
             row=0, column=0, sticky="w", pady=6, padx=(0, 8)
@@ -278,7 +308,13 @@ class ManageView(ttk.Frame):
         device_box = ttk.Combobox(
             device_group, textvariable=device_var, width=36, values=[]
         )
-        device_box.grid(row=0, column=1, sticky="w", pady=6)
+        device_box.grid(row=0, column=1, sticky="ew", pady=6)
+        ttk.Label(device_group, text="", style="Modal.TLabel").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=6
+        )
+        ttk.Label(device_group, text="", style="Modal.TLabel").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=6
+        )
 
         def refresh_devices() -> None:
             devices = []
@@ -292,10 +328,6 @@ class ManageView(ttk.Frame):
             device_box["values"] = devices
             device_var.set(devices[0])
 
-        refresh_btn = ttk.Button(
-            device_group, text="Refresh", command=refresh_devices, style="Modal.TButton"
-        )
-        refresh_btn.grid(row=0, column=2, padx=(8, 0))
         refresh_devices()
 
         def refresh_fields() -> None:
@@ -304,14 +336,12 @@ class ManageView(ttk.Frame):
             user_entry.configure(state="normal")
             pass_entry.configure(state="normal")
             device_box.configure(state="normal")
-            refresh_btn.configure(state="normal")
             if is_device:
                 rtsp_url_entry.configure(state="disabled")
                 user_entry.configure(state="disabled")
                 pass_entry.configure(state="disabled")
             else:
                 device_box.configure(state="disabled")
-                refresh_btn.configure(state="disabled")
 
         def on_save() -> None:
             camera_name = name_var.get().strip()
@@ -367,11 +397,11 @@ class ManageView(ttk.Frame):
         action_row = ttk.Frame(body, style="Modal.TFrame")
         action_row.pack(fill=tk.X, pady=(12, 0))
         ttk.Button(
-            action_row, text="Save", command=on_save, style="Modal.TButton"
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(
             action_row, text="Cancel", command=dialog.destroy, style="Modal.TButton"
-        ).pack(side=tk.LEFT)
+        ).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(
+            action_row, text="Save", command=on_save, style="Modal.TButton"
+        ).pack(side=tk.RIGHT)
 
     def _open_edit_camera_dialog(self) -> None:
         name = self._get_selected_camera_name()
@@ -386,8 +416,8 @@ class ManageView(ttk.Frame):
         dialog.transient(self)
         dialog.resizable(False, False)
 
-        width = 640
-        height = 560
+        width = 740
+        height = 520
         x = self.winfo_rootx() + (self.winfo_width() - width) // 2
         y = self.winfo_rooty() + (self.winfo_height() - height) // 2
         dialog.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
@@ -479,9 +509,10 @@ class ManageView(ttk.Frame):
         pass_entry.grid(row=2, column=1, sticky="w", pady=6)
 
         device_group = ttk.Labelframe(
-            body, text="Select Device", padding=12, style="Modal.TLabelframe"
+            form, text="Select Device", padding=12, style="Modal.TLabelframe"
         )
-        device_group.pack(fill=tk.X, pady=(0, 12))
+        device_group.grid(row=2, column=1, sticky="nsew", pady=(0, 12))
+        device_group.columnconfigure(1, weight=1)
 
         ttk.Label(device_group, text="Device:", style="Modal.TLabel").grid(
             row=0, column=0, sticky="w", pady=6, padx=(0, 8)
@@ -489,7 +520,13 @@ class ManageView(ttk.Frame):
         device_box = ttk.Combobox(
             device_group, textvariable=device_var, width=36, values=[]
         )
-        device_box.grid(row=0, column=1, sticky="w", pady=6)
+        device_box.grid(row=0, column=1, sticky="ew", pady=6)
+        ttk.Label(device_group, text="", style="Modal.TLabel").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=6
+        )
+        ttk.Label(device_group, text="", style="Modal.TLabel").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=6
+        )
 
         def refresh_devices() -> None:
             devices = []
@@ -504,9 +541,6 @@ class ManageView(ttk.Frame):
             if device_var.get() not in devices:
                 device_var.set(devices[0])
 
-        ttk.Button(device_group, text="Refresh", command=refresh_devices, style="Modal.TButton").grid(
-            row=0, column=2, padx=(8, 0)
-        )
         refresh_devices()
 
         def refresh_fields() -> None:

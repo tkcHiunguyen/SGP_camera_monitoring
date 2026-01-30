@@ -17,6 +17,7 @@ Files/Media/
 Files/Videos/
 app/Files/Videos/
 Files/Tracking/
+Files/Exports/
 
 # Models & large binaries
 *.pt
@@ -29,3 +30,11 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Backups
+*.bak

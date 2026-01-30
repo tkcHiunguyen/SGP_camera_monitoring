@@ -13,7 +13,8 @@ import time
 
 from app.ui.edit_components import EditToolbar, PlaybackControls
 from app.ui.widgets.trackbar_view import TrackbarView
-from app.utils.paths import get_base_dir
+from app.ui.widgets.empty_state import EmptyState
+from app.utils.paths import get_base_dir, get_files_dir
 
 try:
     import mpv
@@ -29,6 +30,7 @@ class EditView(ttk.Frame):
         self._trim_enabled = False
         self._crop_enabled = False
         self._video_label: ttk.Label | None = None
+        self._empty_state: EmptyState | None = None
         self._video_panel: tk.Frame | None = None
         self._video_path: Path | None = None
         self._video_cap = None
@@ -125,6 +127,7 @@ class EditView(ttk.Frame):
             on_trim=self._toggle_trim,
             on_crop=self._toggle_crop,
             on_save=self._on_save_edit,
+            width=200,
         )
         toolbar.pack(side=tk.LEFT, fill=tk.Y)
         self._toolbar = toolbar
@@ -144,6 +147,15 @@ class EditView(ttk.Frame):
         video_label.bind("<Button-3>", self._on_crop_clear)
         self._video_label = video_label
 
+        empty_state = EmptyState(
+            video_area,
+            title="No video loaded",
+            message="Open a file to start trimming and cropping.",
+            icon="\uf03d",
+            variant="dark",
+        )
+        empty_state.place(relx=0.5, rely=0.5, anchor="center")
+        self._empty_state = empty_state
 
         self._build_progress_row(body, fullscreen=False)
 
@@ -170,7 +182,7 @@ class EditView(ttk.Frame):
         self._loop_btn = controls.loop_button
 
     def _open_file(self) -> None:
-        base_dir = get_base_dir() / "Files"
+        base_dir = get_files_dir()
         path = filedialog.askopenfilename(
             title="Open File",
             initialdir=str(Path(base_dir)),
@@ -217,6 +229,7 @@ class EditView(ttk.Frame):
                 "Cannot open this file. It may be corrupted or missing moov atom.",
             )
             return
+        self._set_empty_state_visible(False)
         self._total_frames = int(self._video_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         fps = self._video_cap.get(cv2.CAP_PROP_FPS) or 0.0
         if fps < 20.0 or fps > 120.0:
@@ -241,6 +254,7 @@ class EditView(ttk.Frame):
             self._create_mpv_player(wid, path, 0.0, False)
             if self._video_label is not None:
                 self._video_label.lower()
+            self._set_empty_state_visible(False)
             self._schedule_progress_update()
             return True
         except Exception as exc:
@@ -478,8 +492,8 @@ class EditView(ttk.Frame):
             bg="#0f172a",
             fg="#e2e8f0",
             font=("Bai Jamjuree", 12, "bold"),
-            padx=24,
-            pady=16,
+            padx=20,
+            pady=12,
         )
         label.pack()
         self._waiting_dialog = dlg
@@ -509,8 +523,8 @@ class EditView(ttk.Frame):
             bg="#0f172a",
             fg="#e2e8f0",
             font=("Bai Jamjuree", 11, "bold"),
-            padx=24,
-            pady=16,
+            padx=20,
+            pady=12,
             justify="center",
         )
         label.pack()
@@ -550,10 +564,11 @@ class EditView(ttk.Frame):
         self._center_dialog(dlg)
 
     def _center_dialog(self, dlg: tk.Toplevel) -> None:
+        root = self.winfo_toplevel()
+        root.update_idletasks()
         dlg.update_idletasks()
         w = dlg.winfo_width()
         h = dlg.winfo_height()
-        root = self.winfo_toplevel()
         x = root.winfo_rootx() + (root.winfo_width() - w) // 2
         y = root.winfo_rooty() + (root.winfo_height() - h) // 2
         dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
@@ -604,7 +619,7 @@ class EditView(ttk.Frame):
         pad_left = 10 if fullscreen else 6
         pad_right = 10 if fullscreen else 6
         trackbar = TrackbarView(parent, pad_left=pad_left, pad_right=pad_right)
-        trackbar.pack(side=tk.BOTTOM if fullscreen else tk.TOP, fill=tk.X, pady=(10, 6))
+        trackbar.pack(side=tk.BOTTOM if fullscreen else tk.TOP, fill=tk.X, pady=(6, 4))
         trackbar.set_seek_handler(self._on_seek_ratio)
         trackbar.set_trim_visible(self._trim_enabled)
         if fullscreen:
@@ -621,11 +636,14 @@ class EditView(ttk.Frame):
         photo = ImageTk.PhotoImage(img)
         target_label.configure(image=photo)
         target_label.image = photo
+        if self._video_path is None:
+            self._set_empty_state_visible(True)
 
     def _render_frame(self, frame: np.ndarray) -> None:
         target_label, w, h = self._get_render_target()
         if target_label is None or w <= 0 or h <= 0:
             return
+        self._set_empty_state_visible(False)
         fh, fw = frame.shape[:2]
         scale = min(w / float(fw), h / float(fh))
         new_w = max(1, int(fw * scale))
@@ -746,6 +764,16 @@ class EditView(ttk.Frame):
             self._exit_fullscreen()
         else:
             self._enter_fullscreen()
+
+    def _set_empty_state_visible(self, visible: bool) -> None:
+        if self._empty_state is None:
+            return
+        if visible:
+            if not self._empty_state.winfo_ismapped():
+                self._empty_state.place(relx=0.5, rely=0.5, anchor="center")
+        else:
+            if self._empty_state.winfo_ismapped():
+                self._empty_state.place_forget()
 
     def _enter_fullscreen(self) -> None:
         if self._fullscreen:
