@@ -7,7 +7,6 @@ from typing import Optional
 
 import cv2
 
-from app.utils.ffmpeg import remux_ts_to_mp4
 from app.utils.paths import get_tracking_dir
 
 
@@ -16,7 +15,7 @@ class MotionClipWriter(threading.Thread):
         super().__init__(daemon=True)
         self.camera_name = camera_name
         self.stop_event = stop_event
-        self.queue: "queue.Queue[tuple[str, object] | None]" = queue.Queue(maxsize=60)
+        self.queue: "queue.Queue[tuple[str, object] | None]" = queue.Queue(maxsize=300)
         self._writer: Optional[cv2.VideoWriter] = None
         self._current_path: Optional[Path] = None
         self._current_start: Optional[datetime] = None
@@ -78,7 +77,7 @@ class MotionClipWriter(threading.Thread):
         )
 
     def _build_filename(
-        self, start: datetime, end: Optional[datetime] = None, suffix: str = ".ts"
+        self, start: datetime, end: Optional[datetime] = None, suffix: str = ".mp4"
     ) -> str:
         if end is None:
             return f"{self.camera_name} motion {start:%d-%m-%Y %Hh%Mm%Ss}{suffix}"
@@ -103,8 +102,8 @@ class MotionClipWriter(threading.Thread):
     ) -> cv2.VideoWriter:
         out_dir = self._build_output_dir(now)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = self._unique_path(out_dir / self._build_filename(now, suffix=".ts"))
-        codec_options = ["H264", "mp2v", "mp4v"]
+        out_path = self._unique_path(out_dir / self._build_filename(now, suffix=".mp4"))
+        codec_options = ["mp4v"]
         fps = max(0.1, fps)
         for codec in codec_options:
             fourcc = cv2.VideoWriter_fourcc(*codec)
@@ -148,13 +147,7 @@ class MotionClipWriter(threading.Thread):
             if self._current_path.exists():
                 self._current_path.rename(target)
             self.logger.info("Motion clip saved: %s", target.name)
-            if target.suffix == ".ts":
-                self._try_remux_to_mp4(target)
+            # mp4v writer already outputs mp4
         finally:
             self._current_path = None
             self._current_start = None
-
-    def _try_remux_to_mp4(self, ts_path: Path) -> None:
-        result = remux_ts_to_mp4(ts_path, delete_source=True)
-        if result is not None:
-            self.logger.info("Motion clip remuxed to %s", result.name)

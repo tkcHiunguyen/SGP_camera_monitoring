@@ -16,6 +16,7 @@ class JobDialog:
         self.parent = parent
         self.camera_manager = camera_manager
         self.recorder_manager = recorder_manager
+        self.app_config = recorder_manager.app_config
 
     def open(self) -> None:
         dialog = tk.Toplevel(self.parent)
@@ -52,8 +53,7 @@ class JobDialog:
         cam_names = [
             c.name
             for c in cameras
-            if self._is_connected(self._get_status(c.name))
-            and not self._is_recording(c.name)
+            if self._is_selectable(c)
         ]
 
         tabs = ttk.Notebook(body, style="Modal.TNotebook")
@@ -117,9 +117,7 @@ class JobDialog:
         cam_list.configure(yscrollcommand=scroll.set)
 
         for cam in cameras:
-            if self._is_connected(self._get_status(cam.name)) and not self._is_recording(
-                cam.name
-            ):
+            if self._is_selectable(cam):
                 cam_list.insert(tk.END, cam.name)
 
         ttk.Button(
@@ -205,3 +203,13 @@ class JobDialog:
 
     def _is_recording(self, name: str) -> bool:
         return name in self.recorder_manager.list_active()
+
+    def _is_selectable(self, cam) -> bool:
+        if not getattr(cam, "enabled", True):
+            return False
+        if self._is_recording(cam.name):
+            return False
+        backend = getattr(self.app_config, "record_backend", "opencv")
+        if backend == "ffmpeg_copy":
+            return True
+        return self._is_connected(self._get_status(cam.name))

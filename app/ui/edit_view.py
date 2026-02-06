@@ -33,6 +33,7 @@ class EditView(ttk.Frame):
         self._empty_state: EmptyState | None = None
         self._video_panel: tk.Frame | None = None
         self._video_path: Path | None = None
+        self._last_open_dir: Path | None = None
         self._video_cap = None
         self._video_playing = False
         self._video_fps = 25.0
@@ -182,10 +183,16 @@ class EditView(ttk.Frame):
         self._loop_btn = controls.loop_button
 
     def _open_file(self) -> None:
-        base_dir = get_files_dir()
+        base_dir = Path(get_files_dir())
+        if self._last_open_dir is not None:
+            initial_dir = self._last_open_dir
+        elif self._video_path is not None:
+            initial_dir = self._video_path.parent
+        else:
+            initial_dir = base_dir
         path = filedialog.askopenfilename(
             title="Open File",
-            initialdir=str(Path(base_dir)),
+            initialdir=str(initial_dir),
             filetypes=[
                 ("Video files", "*.mp4 *.avi *.mkv *.ts *.mov"),
                 ("All files", "*.*"),
@@ -193,6 +200,7 @@ class EditView(ttk.Frame):
         )
         if not path:
             return
+        self._last_open_dir = Path(path).parent
         if self._toolbar is not None:
             self._toolbar.set_trim_state(enabled=True, on=False)
             self._toolbar.set_crop_state(enabled=True, on=False)

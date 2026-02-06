@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 from app.config.models import AppConfig, CameraConfig
+from app.core.offline_motion_manager import OfflineMotionManager
 from app.core.recorder_worker import RecorderWorker
+from app.core.stream_manager import StreamManager
+from app.core.frame_store import FrameStore
 from app.storage.maintenance import prune_old_videos
 
 
@@ -16,6 +19,7 @@ class RecorderJob:
     start_time: float
     status: str = "Recording"
     fps: float = 0.0
+    motion_enabled: bool = False
 
 
 class RecorderManager:
@@ -24,12 +28,16 @@ class RecorderManager:
         app_config: AppConfig,
         tracking_manager=None,
         on_disk_warning=None,
+        stream_manager: StreamManager | None = None,
+        frame_store: FrameStore | None = None,
     ) -> None:
         self.app_config = app_config
         self.tracking_manager = tracking_manager
         self.logger = logging.getLogger("RecorderManager")
         self._disk_warning_cb = on_disk_warning
         self._disk_warning_last_ts = 0.0
+        self._stream_manager = stream_manager
+        self._frame_store = frame_store
         self._lock = threading.Lock()
         self._workers: Dict[str, RecorderWorker] = {}
         self._stop_events: Dict[str, threading.Event] = {}
@@ -40,6 +48,14 @@ class RecorderManager:
         self._maint_stop = threading.Event()
         self._maint_thread = threading.Thread(target=self._maintenance_loop, daemon=True)
         self._maint_thread.start()
+        self._offline_motion = (
+            OfflineMotionManager(getattr(app_config, "motion_offline_workers", 1))
+            if getattr(app_config, "motion_offline", False)
+            else None
+        )
+
+    def is_motion_available(self) -> bool:
+        return self._offline_motion is not None
 
     def start(self, camera: CameraConfig) -> None:
         with self._lock:
@@ -50,6 +66,11 @@ class RecorderManager:
             self._stop_events[camera.name] = stop_event
             self._workers[camera.name] = worker
             self._jobs[camera.name] = self._create_job(camera.name)
+        if (
+            self._stream_manager is not None
+            and getattr(self.app_config, "record_backend", "opencv") != "ffmpeg_copy"
+        ):
+            self._stream_manager.acquire(camera.name, "record")
         self._start_worker(worker, camera.name)
 
     def stop(self, camera_name: str) -> None:
@@ -69,6 +90,11 @@ class RecorderManager:
             worker.join(timeout=2)
         if job:
             job.status = "Stopped"
+        if (
+            self._stream_manager is not None
+            and getattr(self.app_config, "record_backend", "opencv") != "ffmpeg_copy"
+        ):
+            self._stream_manager.release(camera_name, "record")
 
     def list_active(self) -> List[str]:
         with self._lock:
@@ -82,19 +108,17 @@ class RecorderManager:
             worker = workers.get(job.camera_name)
             if worker is not None:
                 job.fps = worker.get_fps()
+                job.motion_enabled = worker.get_motion_enabled()
         return jobs
 
-    def set_motion_enabled(self, camera_name: str, enabled: bool) -> None:
+    def set_job_motion_enabled(self, camera_name: str, enabled: bool) -> None:
         with self._lock:
+            job = self._jobs.get(camera_name)
             worker = self._workers.get(camera_name)
-            if worker is None:
-                return
-            worker.set_motion_enabled(enabled)
-
-    def get_motion_enabled(self, camera_name: str) -> bool:
-        with self._lock:
-            worker = self._workers.get(camera_name)
-            return worker.get_motion_enabled() if worker is not None else False
+        if job is not None:
+            job.motion_enabled = bool(enabled)
+        if worker is not None:
+            worker.set_motion_enabled(bool(enabled))
 
     def shutdown(self) -> None:
         for name in self.list_active():
@@ -103,6 +127,8 @@ class RecorderManager:
         self._stop_worker.join(timeout=2)
         self._maint_stop.set()
         self._maint_thread.join(timeout=2)
+        if self._offline_motion is not None:
+            self._offline_motion.shutdown()
 
     def _stop_loop(self) -> None:
         while True:
@@ -134,10 +160,16 @@ class RecorderManager:
             stop_event,
             tracking_manager=self.tracking_manager,
             disk_warning_cb=self._handle_disk_warning,
+            offline_motion_manager=self._offline_motion,
+            frame_store=self._frame_store,
         )
 
     def _create_job(self, camera_name: str) -> RecorderJob:
-        return RecorderJob(camera_name=camera_name, start_time=time.time())
+        return RecorderJob(
+            camera_name=camera_name,
+            start_time=time.time(),
+            motion_enabled=False,
+        )
 
     def _start_worker(self, worker: RecorderWorker, camera_name: str) -> None:
         worker.start()

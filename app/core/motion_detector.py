@@ -14,9 +14,13 @@ class MotionConfig:
     record_fps: int = 15
     idle_record_fps: float = 1.0
     start_frames: int = 10
-    stop_seconds: float = 5.0
-    motion_scale: float = 0.5
+    stop_seconds: float = 10.0
+    motion_scale: float = 0.1
+    motion_fps: float = 0.0
     motion_capture_seconds: float = 1.0
+    motion_offline_fps_idle: float = 0.5
+    motion_offline_fps_active: float = 2.0
+    motion_offline_boost_seconds: float = 5.0
     clip_fps: float = 15.0
     clip_hold_seconds: float = 2.0
     clip_min_seconds: float = 2.0

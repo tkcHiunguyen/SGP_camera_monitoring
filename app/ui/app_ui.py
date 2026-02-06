@@ -6,6 +6,8 @@ from app.config.models import AppConfig
 from app.config.store import ConfigStore
 from app.core.camera_manager import CameraManager
 from app.core.recorder_manager import RecorderManager
+from app.core.stream_manager import StreamManager
+from app.core.frame_store import FrameStore
 from app.ui.edit_view import EditView
 from app.ui.live_view import LiveView
 from app.ui.manage_view import ManageView
@@ -23,12 +25,16 @@ class AppUI:
         config_store: ConfigStore,
         camera_manager: CameraManager,
         recorder_manager: RecorderManager,
+        stream_manager: StreamManager,
+        frame_store: FrameStore,
     ) -> None:
         self.root = root
         self.app_config = app_config
         self.config_store = config_store
         self.camera_manager = camera_manager
         self.recorder_manager = recorder_manager
+        self.stream_manager = stream_manager
+        self.frame_store = frame_store
 
         os.environ.setdefault(
             "OPENCV_FFMPEG_CAPTURE_OPTIONS",
@@ -126,15 +132,26 @@ class AppUI:
         self.content.pack(fill=tk.BOTH, expand=True)
 
         self.manage_view = ManageView(
-            self.content, self.camera_manager, self.recorder_manager
-        )
-        self.recorder_view = RecorderView(
-            self.content, self.camera_manager, self.recorder_manager
-        )
-        self.live_view = LiveView(
             self.content,
             self.camera_manager,
             self.recorder_manager,
+            self.stream_manager,
+            self.frame_store,
+        )
+        self.recorder_view = RecorderView(
+            self.content,
+            self.camera_manager,
+            self.recorder_manager,
+            self.stream_manager,
+            self.frame_store,
+        )
+        self.live_view = LiveView(
+            self.content,
+            self.app_config,
+            self.camera_manager,
+            self.recorder_manager,
+            self.stream_manager,
+            self.frame_store,
             on_fullscreen_toggle=self._on_liveview_fullscreen,
         )
         self.edit_view = EditView(self.content)
@@ -151,14 +168,19 @@ class AppUI:
         self.edit_view.pack_forget()
         self.settings_view.pack_forget()
         if tab_name == "Manage":
+            self.live_view.set_active(False)
             self.manage_view.pack(fill=tk.BOTH, expand=True)
         elif tab_name == "Recorder":
+            self.live_view.set_active(False)
             self.recorder_view.pack(fill=tk.BOTH, expand=True)
         elif tab_name == "Edit":
+            self.live_view.set_active(False)
             self.edit_view.pack(fill=tk.BOTH, expand=True)
         elif tab_name == "Settings":
+            self.live_view.set_active(False)
             self.settings_view.pack(fill=tk.BOTH, expand=True)
         else:
+            self.live_view.set_active(True)
             self.live_view.pack(fill=tk.BOTH, expand=True)
         for name, btn in self._menu_buttons.items():
             btn.configure(

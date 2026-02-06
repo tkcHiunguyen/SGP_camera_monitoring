@@ -1,10 +1,7 @@
-import queue
-import threading
 import time
 import tkinter as tk
 from pathlib import Path
 from typing import Callable
-from urllib.parse import quote
 from tkinter import ttk
 
 import cv2
@@ -12,7 +9,10 @@ import numpy as np
 from PIL import Image, ImageTk
 import unicodedata
 
+from app.config.models import AppConfig
 from app.core.camera_manager import CameraManager
+from app.core.stream_manager import StreamManager
+from app.core.frame_store import FrameStore
 from app.core.recorder_manager import RecorderManager
 from app.ui.widgets.empty_state import EmptyState
 
@@ -21,28 +21,34 @@ class LiveView(ttk.Frame):
     def __init__(
         self,
         parent: tk.Misc,
+        app_config: AppConfig,
         camera_manager: CameraManager,
         recorder_manager: RecorderManager,
+        stream_manager: StreamManager,
+        frame_store: FrameStore,
         on_fullscreen_toggle: Callable[[bool], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.camera_manager = camera_manager
         self.recorder_manager = recorder_manager
+        self.stream_manager = stream_manager
+        self.frame_store = frame_store
         self.selected: dict[str, tk.BooleanVar] = {}
         self.page_index = 0
         self.page_size = 9
         self._layout_mode = "Auto"
         self.view_size = (800, 520)
-        self.tile_labels: list[ttk.Label] = []
-        self._latest_frames: dict[str, tuple[np.ndarray, int]] = {}
-        self._frame_queue: queue.Queue[tuple[str, np.ndarray, int]] = queue.Queue(
-            maxsize=96
-        )
-        self._queue_poll_ms = 30
-        self._capture_threads: dict[str, threading.Thread] = {}
-        self._capture_stops: dict[str, threading.Event] = {}
+        self._canvas_image_id: int | None = None
+        self._canvas_photo: ImageTk.PhotoImage | None = None
+        self._latest_frames: dict[str, np.ndarray] = {}
+        self._active_streams: set[str] = set()
+        self._render_tick_ms = 60
         self.refresh_ms = 350
         self._preview_max_dim = 960
+        self._preview_fps_base = max(1.0, float(getattr(app_config, "fps_detect", 5) or 5))
+        self._preview_fps = self._preview_fps_base
+        self._render_interval = 1.0 / min(self._preview_fps, 15.0)
+        self._last_render_ts = 0.0
         self._fullscreen = False
         self._sidebar_hidden = False
         self._container: ttk.Frame | None = None
@@ -55,6 +61,7 @@ class LiveView(ttk.Frame):
         self._sidebar_toggle_btn: ttk.Button | None = None
         self._sidebar_show_btn: ttk.Button | None = None
         self._fullscreen_exit_btn: ttk.Button | None = None
+        self._active = True
         self._fs_prev_btn: tk.Button | None = None
         self._fs_next_btn: tk.Button | None = None
         self._list_bg = "#f5f6f8"
@@ -75,7 +82,14 @@ class LiveView(ttk.Frame):
         self._load_layout_previews()
         self._update_preview_quality()
         self._render_view()
-        self.after(self._queue_poll_ms, self._poll_frame_queue)
+        self.after(self._render_tick_ms, self._tick_render)
+
+    def set_active(self, active: bool) -> None:
+        self._active = bool(active)
+        if not self._active:
+            self._shutdown_captures()
+            return
+        self._sync_captures()
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self, style="App.TFrame")
@@ -522,89 +536,23 @@ class LiveView(ttk.Frame):
         return [name for name, var in self.selected.items() if var.get()]
 
     def _sync_captures(self) -> None:
-        selected = set(self._get_selected_names())
-        existing = set(self._capture_threads.keys())
-        for name in selected - existing:
-            self._start_capture_for(name)
-        for name in existing - selected:
-            self._stop_capture_for(name)
-
-    def _start_capture_for(self, name: str) -> None:
-        try:
-            cam = self.camera_manager.get_camera(name)
-        except KeyError:
+        if not self._active:
             return
-        stop_event = threading.Event()
-        thread = threading.Thread(
-            target=self._capture_loop, args=(name, cam, stop_event), daemon=True
-        )
-        self._capture_stops[name] = stop_event
-        self._capture_threads[name] = thread
-        thread.start()
-
-    def _stop_capture_for(self, name: str) -> None:
-        stop = self._capture_stops.pop(name, None)
-        if stop:
-            stop.set()
-        self._capture_threads.pop(name, None)
-        self._latest_frames.pop(name, None)
+        selected = set(self._get_selected_names())
+        existing = set(self._active_streams)
+        for name in selected - existing:
+            self.stream_manager.acquire(name, "live")
+            self._active_streams.add(name)
+        for name in existing - selected:
+            self.stream_manager.release(name, "live")
+            self._latest_frames.pop(name, None)
+            self._active_streams.discard(name)
 
     def _shutdown_captures(self) -> None:
-        for name in list(self._capture_threads.keys()):
-            self._stop_capture_for(name)
-
-    def _build_rtsp_url(self, cam) -> str:
-        if cam.rtsp_url:
-            return cam.rtsp_url
-        user = quote(cam.user, safe="")
-        password = quote(cam.password, safe="")
-        auth = f"{user}:{password}@" if user or password else ""
-        return f"rtsp://{auth}{cam.ip}:{cam.port}{cam.stream_path}"
-
-    def _capture_loop(self, name: str, cam, stop_event: threading.Event) -> None:
-        backoff = 0.5
-        cap = None
-        seq = 0
-        while not stop_event.is_set():
-            if cap is None or not cap.isOpened():
-                if cap is not None:
-                    cap.release()
-                if cam.source == "device":
-                    cap = cv2.VideoCapture(cam.device_index)
-                else:
-                    cap = cv2.VideoCapture(self._build_rtsp_url(cam))
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                if not cap.isOpened():
-                    time.sleep(backoff)
-                    backoff = min(backoff * 2, 5.0)
-                    continue
-                backoff = 0.5
-            if not cap.grab():
-                time.sleep(0.02)
-                cap.release()
-                cap = None
-                continue
-            ok, frame = cap.retrieve()
-            if not ok or frame is None:
-                time.sleep(0.02)
-                cap.release()
-                cap = None
-                continue
-            frame = self._downscale_frame(frame)
-            seq += 1
-            try:
-                self._frame_queue.put_nowait((name, frame, seq))
-            except queue.Full:
-                try:
-                    self._frame_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    self._frame_queue.put_nowait((name, frame, seq))
-                except queue.Full:
-                    pass
-        if cap is not None:
-            cap.release()
+        for name in list(self._active_streams):
+            self.stream_manager.release(name, "live")
+        self._latest_frames.clear()
+        self._active_streams.clear()
 
     def _grid_for_count(self, count: int) -> tuple[int, int]:
         if count <= 1:
@@ -782,6 +730,15 @@ class LiveView(ttk.Frame):
             self._preview_max_dim = 640
         else:
             self._preview_max_dim = 480
+        if count <= 1:
+            self._preview_fps = min(self._preview_fps_base, 15.0)
+        elif count <= 4:
+            self._preview_fps = min(self._preview_fps_base, 15.0)
+        elif count <= 9:
+            self._preview_fps = min(self._preview_fps_base, 12.0)
+        else:
+            self._preview_fps = min(self._preview_fps_base, 10.0)
+        self._render_interval = 1.0 / max(1.0, min(self._preview_fps, 15.0))
 
     def _downscale_frame(self, frame: np.ndarray) -> np.ndarray:
         max_dim = self._preview_max_dim
@@ -804,16 +761,6 @@ class LiveView(ttk.Frame):
         if self.page_index < max_page:
             self.page_index += 1
             self._render_view()
-
-    def _ensure_tiles(self, count: int) -> None:
-        while len(self.tile_labels) < count:
-            label = ttk.Label(self.view_canvas, background="#111111")
-            self.tile_labels.append(label)
-        for idx, label in enumerate(self.tile_labels):
-            if idx < count:
-                label.place_forget()
-            else:
-                label.place_forget()
 
     def _get_status(self, name: str) -> str:
         if name in self.recorder_manager.list_active():
@@ -839,24 +786,26 @@ class LiveView(ttk.Frame):
         )
         return frame
 
-    def _poll_frame_queue(self) -> None:
-        updated = False
-        try:
-            while True:
-                name, frame, seq = self._frame_queue.get_nowait()
-                self._latest_frames[name] = (frame, seq)
-                updated = True
-        except queue.Empty:
-            pass
-        if updated:
+    def _tick_render(self) -> None:
+        if not self._active:
+            self.after(self._render_tick_ms, self._tick_render)
+            return
+        now = time.time()
+        if now - self._last_render_ts >= self._render_interval:
+            self._last_render_ts = now
             self._render_view()
-        self.after(self._queue_poll_ms, self._poll_frame_queue)
+        self.after(self._render_tick_ms, self._tick_render)
 
     def _render_view(self) -> None:
         names = self._get_selected_names()
         if not names:
-            for label in self.tile_labels:
-                label.place_forget()
+            if self._canvas_image_id is not None:
+                try:
+                    self.view_canvas.delete(self._canvas_image_id)
+                except Exception:
+                    pass
+                self._canvas_image_id = None
+                self._canvas_photo = None
             self.page_label.config(text="Page 0/0")
             self.prev_btn.config(state="disabled")
             self.next_btn.config(state="disabled")
@@ -877,52 +826,30 @@ class LiveView(ttk.Frame):
         page_names = names[start : start + self.page_size]
 
         w, h = self.view_size
+        if w <= 0 or h <= 0:
+            return
         positions = self._layout_positions(len(page_names), w, h)
 
-        self._ensure_tiles(len(page_names))
+        mosaic = np.full((h, w, 3), 10, dtype=np.uint8)
         for idx, name in enumerate(page_names):
             x, y, tile_w, tile_h = positions[idx]
-
-            frame_entry = self._latest_frames.get(name)
-            if frame_entry is None:
-                frame = None
-                frame_id = -1
-            else:
-                frame, frame_id = frame_entry
-            label = self.tile_labels[idx]
-            if (
-                getattr(label, "camera_name", None) == name
-                and getattr(label, "_last_frame_id", None) == frame_id
-                and getattr(label, "_last_size", None) == (tile_w, tile_h)
-                and getattr(label, "image", None) is not None
-            ):
-                label.place(x=x, y=y, width=tile_w, height=tile_h)
-                continue
+            frame = self._get_live_frame(name)
             if frame is None:
-                frame = self._draw_placeholder(tile_w, tile_h, name)
+                tile = self._draw_placeholder(tile_w, tile_h, name)
             else:
-                frame = self._fit_to_tile(frame, tile_w, tile_h)
-            if not self._fullscreen:
-                cv2.putText(
-                    frame,
-                    f"{self._ascii_label(name)} | #{idx + 1}",
-                    (10, 24),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
+                tile = self._fit_to_tile(frame, tile_w, tile_h)
+            mosaic[y : y + tile_h, x : x + tile_w] = tile
 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(rgb)
-            photo = ImageTk.PhotoImage(img)
-            label.configure(image=photo)
-            label.image = photo
-            label.camera_name = name
-            label._last_frame_id = frame_id
-            label._last_size = (tile_w, tile_h)
-            label.place(x=x, y=y, width=tile_w, height=tile_h)
+        rgb = cv2.cvtColor(mosaic, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(rgb)
+        photo = ImageTk.PhotoImage(img)
+        if self._canvas_image_id is None:
+            self._canvas_image_id = self.view_canvas.create_image(
+                0, 0, anchor="nw", image=photo
+            )
+        else:
+            self.view_canvas.itemconfig(self._canvas_image_id, image=photo)
+        self._canvas_photo = photo
 
         self.page_label.config(text=f"Page {self.page_index + 1}/{max_page + 1}")
         self.prev_btn.config(state="normal" if self.page_index > 0 else "disabled")
@@ -951,6 +878,14 @@ class LiveView(ttk.Frame):
         x = (tile_w - new_w) // 2
         canvas[y : y + new_h, x : x + new_w] = resized
         return canvas
+
+    def _get_live_frame(self, name: str) -> np.ndarray | None:
+        frame = self.frame_store.get_frame(name)
+        if frame is None:
+            return self._latest_frames.get(name)
+        frame = self._downscale_frame(frame)
+        self._latest_frames[name] = frame
+        return frame
 
     def _ascii_label(self, text: str) -> str:
         if not text:

@@ -10,6 +10,8 @@ from PIL import Image, ImageTk
 from app.config.models import CameraConfig
 from app.core.camera_manager import CameraManager
 from app.core.recorder_manager import RecorderManager
+from app.core.stream_manager import StreamManager
+from app.core.frame_store import FrameStore
 from app.ui.live_actions import open_live
 from app.ui.widgets.empty_state import EmptyState
 
@@ -20,10 +22,14 @@ class ManageView(ttk.Frame):
         parent: tk.Misc,
         camera_manager: CameraManager,
         recorder_manager: RecorderManager,
+        stream_manager: StreamManager,
+        frame_store: FrameStore,
     ) -> None:
         super().__init__(parent)
         self.camera_manager = camera_manager
         self.recorder_manager = recorder_manager
+        self.stream_manager = stream_manager
+        self.frame_store = frame_store
         self._conn_status: dict[str, str] = {}
         self._conn_lock = threading.Lock()
         self._conn_stop = threading.Event()
@@ -761,6 +767,8 @@ class ManageView(ttk.Frame):
                     return
                 new_enabled = not cam.enabled
                 self.camera_manager.set_camera_enabled(name, new_enabled)
+                if new_enabled:
+                    self._trigger_single_check(name)
                 self._refresh_camera_list()
             return
         if column == "#7":
@@ -768,4 +776,4 @@ class ManageView(ttk.Frame):
             if values:
                 name = values[1]
                 camera = self.camera_manager.get_camera(name)
-                open_live(self, camera)
+                open_live(self, camera, self.stream_manager, self.frame_store)

@@ -1,21 +1,26 @@
 import logging
+import os
+import subprocess
 import queue
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union, Callable
+from typing import Optional, Callable
 
 import cv2
 
 from app.config.models import AppConfig, CameraConfig
-from app.core.motion_clip_writer import MotionClipWriter
-from app.core.motion_detector import apply_motion, ensure_motion, get_motion_config
-from app.storage.layout import motion_capture_dir_for, videos_dir_for
+from app.core.frame_store import FrameStore
+from app.storage.layout import videos_dir_for
 from app.storage.maintenance import get_free_gb, has_min_free_gb
-from app.utils.ffmpeg import remux_ts_to_mp4
+from app.utils.ffmpeg import remux_ts_to_mp4, find_ffmpeg
 from app.utils.paths import get_videos_dir
 from app.utils.rtsp import build_rtsp_url
+try:
+    from app.utils.perf_probe import PerfProbe
+except Exception:
+    PerfProbe = None
 
 
 class RecorderWorker(threading.Thread):
@@ -26,6 +31,8 @@ class RecorderWorker(threading.Thread):
         stop_event: threading.Event,
         tracking_manager=None,
         disk_warning_cb: Optional[Callable[[float, float], None]] = None,
+        offline_motion_manager=None,
+        frame_store: FrameStore | None = None,
     ) -> None:
         super().__init__(daemon=True)
         self.camera = camera
@@ -33,23 +40,24 @@ class RecorderWorker(threading.Thread):
         self.stop_event = stop_event
         self.tracking_manager = tracking_manager
         self.disk_warning_cb = disk_warning_cb
+        self._offline_motion_manager = offline_motion_manager
         self.logger = logging.getLogger(f"Recorder[{camera.name}]")
         self._fps = 0.0
         self._last_fps_ts = time.time()
         self._motion_enabled = False
-        self._motion_state = {"bg": None}
-        self._motion_active = False
-        self._motion_count = 0
-        self._motion_last_seen = 0.0
-        self._motion_writer: Optional[MotionClipWriter] = None
-        self._motion_last_clip_ts = 0.0
-        self._clip_hold_until = 0.0
-        self._clip_start_ts = 0.0
-        self._motion_capture_last_ts = 0.0
         self._disk_low_last_log = 0.0
         self._frame_queue: "queue.Queue[cv2.Mat | None]" = queue.Queue(maxsize=8)
         self._capture_thread: Optional[threading.Thread] = None
         self._capture_stop = threading.Event()
+        self._record_backend = getattr(app_config, "record_backend", "opencv")
+        self._ffmpeg_proc: Optional[subprocess.Popen] = None
+        self._current_path: Optional[Path] = None
+        self._current_start: Optional[datetime] = None
+        self._frame_store = frame_store
+        self._last_shared_ts = 0.0
+        self._perf = None
+        if PerfProbe is not None and os.environ.get("PERF_PROBE"):
+            self._perf = PerfProbe(f"recorder_{camera.name}")
 
     def get_fps(self) -> float:
         return self._fps
@@ -69,6 +77,8 @@ class RecorderWorker(threading.Thread):
         return cv2.VideoCapture(self._build_rtsp_url(), cv2.CAP_FFMPEG)
 
     def _start_capture(self) -> None:
+        if self._frame_store is not None:
+            return
         self._capture_stop.clear()
         self._capture_thread = threading.Thread(
             target=self._capture_loop, daemon=True
@@ -76,6 +86,8 @@ class RecorderWorker(threading.Thread):
         self._capture_thread.start()
 
     def _stop_capture(self) -> None:
+        if self._frame_store is not None:
+            return
         self._capture_stop.set()
         if self._capture_thread is not None:
             self._capture_thread.join(timeout=2)
@@ -100,6 +112,8 @@ class RecorderWorker(threading.Thread):
                 cap.release()
                 cap = None
                 continue
+            if self._perf is not None:
+                self._perf.record_capture(grabbed=1, queue_size=self._frame_queue.qsize())
             ok, frame = cap.retrieve()
             if not ok or frame is None:
                 time.sleep(0.02)
@@ -108,6 +122,8 @@ class RecorderWorker(threading.Thread):
                 continue
             try:
                 self._frame_queue.put_nowait(frame)
+                if self._perf is not None:
+                    self._perf.record_capture(decoded=1, queued=1)
             except queue.Full:
                 try:
                     self._frame_queue.get_nowait()
@@ -115,7 +131,11 @@ class RecorderWorker(threading.Thread):
                     pass
                 try:
                     self._frame_queue.put_nowait(frame)
+                    if self._perf is not None:
+                        self._perf.record_capture(decoded=1, queued=1, dropped=1)
                 except queue.Full:
+                    if self._perf is not None:
+                        self._perf.record_capture(decoded=1, dropped=1)
                     pass
         if cap is not None:
             cap.release()
@@ -195,9 +215,133 @@ class RecorderWorker(threading.Thread):
                 str(out_path), fourcc, fps, (frame_width, frame_height)
             )
 
-    def _finalize_current(self, end: datetime) -> None:
-        if not self._current_path or not self._current_start:
+    def _start_ffmpeg_recording(self, out_path: Path) -> Optional[subprocess.Popen]:
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            self.logger.warning("ffmpeg not found; cannot use ffmpeg_copy backend")
+            return None
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        target_kbps = int(getattr(self.app_config, "record_bitrate_kbps", 4000) or 4000)
+        maxrate_kbps = max(1, int(target_kbps * 1.1))
+        bufsize_kbps = max(1, int(target_kbps * 2))
+        fps = max(1, int(getattr(self.app_config, "fps_record", 15) or 15))
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            self._build_rtsp_url(),
+            "-map",
+            "0",
+            "-c:v",
+            "libx265",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            "-b:v",
+            f"{target_kbps}k",
+            "-maxrate",
+            f"{maxrate_kbps}k",
+            "-bufsize",
+            f"{bufsize_kbps}k",
+            "-fps_mode",
+            "cfr",
+            "-r",
+            str(fps),
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-f",
+            "mpegts",
+            str(out_path),
+        ]
+        try:
+            return subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        except Exception as exc:
+            self.logger.warning("Failed to start ffmpeg: %s", exc)
+            return None
+
+    def _stop_ffmpeg_recording(self, stamp: datetime) -> None:
+        proc = self._ffmpeg_proc
+        if proc is None:
             return
+        self._ffmpeg_proc = None
+        try:
+            if proc.poll() is None and proc.stdin is not None:
+                try:
+                    proc.stdin.write(b"q\n")
+                    proc.stdin.flush()
+                except Exception:
+                    pass
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        self._finalize_current(stamp, transcode=False)
+
+    def _ensure_ffmpeg_process(
+        self,
+        stamp: datetime,
+        current_hour_key: Optional[str],
+    ) -> Optional[str]:
+        if self.app_config.enable_disk_check:
+            free_gb = get_free_gb(get_videos_dir())
+            if free_gb < float(self.app_config.min_free_gb):
+                now = time.time()
+                if now - self._disk_low_last_log > 10.0:
+                    self.logger.warning(
+                        "Disk free %.2f GB below %s GB for %s",
+                        free_gb,
+                        self.app_config.min_free_gb,
+                        self.camera.name,
+                    )
+                    self._disk_low_last_log = now
+                if self.disk_warning_cb is not None:
+                    try:
+                        self.disk_warning_cb(free_gb, float(self.app_config.min_free_gb))
+                    except Exception:
+                        self.logger.exception("Disk warning callback failed")
+                if self.app_config.enable_disk_quota:
+                    self._stop_ffmpeg_recording(stamp)
+                    return current_hour_key
+        next_hour_key = stamp.strftime("%Y%m%d%H")
+        if (
+            self._ffmpeg_proc is None
+            or self._ffmpeg_proc.poll() is not None
+            or current_hour_key != next_hour_key
+        ):
+            if self._ffmpeg_proc is not None:
+                self._stop_ffmpeg_recording(stamp)
+            out_path = self._build_output_path(stamp, suffix=".ts")
+            self._current_path = out_path
+            self._current_start = stamp
+            self._ffmpeg_proc = self._start_ffmpeg_recording(out_path)
+            if self._ffmpeg_proc is None:
+                return None
+            self.logger.info("FFmpeg recording to %s", out_path.name)
+            current_hour_key = next_hour_key
+        return current_hour_key
+
+    def _finalize_current(self, end: datetime, transcode: bool = True) -> Optional[Path]:
+        if not self._current_path or not self._current_start:
+            return None
         try:
             base_dir = self._build_output_dir(self._current_start)
             base_dir.mkdir(parents=True, exist_ok=True)
@@ -208,19 +352,40 @@ class RecorderWorker(threading.Thread):
             if self._current_path.exists():
                 self._current_path.rename(target)
             if target.suffix == ".ts":
-                self._try_remux_to_mp4(target)
+                mp4_path = self._try_remux_to_mp4(target, transcode=transcode)
+                if mp4_path is not None:
+                    target = mp4_path
+            self._enqueue_offline_motion(target)
+            return target
         except Exception as exc:
             self.logger.warning("Failed to finalize filename: %s", exc)
+            return None
         finally:
             self._current_path = None
             self._current_start = None
 
-    def _try_remux_to_mp4(self, ts_path: Path) -> None:
-        mp4_path = remux_ts_to_mp4(ts_path, delete_source=True)
+    def _try_remux_to_mp4(self, ts_path: Path, transcode: bool = True) -> Optional[Path]:
+        mp4_path = remux_ts_to_mp4(ts_path, delete_source=True, transcode=transcode)
         if mp4_path is not None and self.tracking_manager is not None:
             self.tracking_manager.enqueue(mp4_path)
+        return mp4_path
+
+    def _enqueue_offline_motion(self, video_path: Path | None) -> None:
+        if (
+            self._offline_motion_manager is None
+            or video_path is None
+            or not bool(getattr(self.app_config, "motion_offline", True))
+            or not self._motion_enabled
+        ):
+            return
+        try:
+            self._offline_motion_manager.enqueue(video_path)
+        except Exception:
+            self.logger.exception("Failed to enqueue offline motion for %s", video_path)
 
     def _next_frame(self) -> Optional[cv2.Mat]:
+        if self._frame_store is not None:
+            return self._next_shared_frame()
         try:
             frame = self._frame_queue.get(timeout=0.2)
         except queue.Empty:
@@ -231,6 +396,27 @@ class RecorderWorker(threading.Thread):
             except queue.Empty:
                 break
         return frame
+
+    def _next_shared_frame(self) -> Optional[cv2.Mat]:
+        if self._frame_store is None:
+            return None
+        deadline = time.time() + 0.2
+        while not self.stop_event.is_set():
+            data = self._frame_store.get_frame_with_ts(self.camera.name)
+            if data is None:
+                if time.time() > deadline:
+                    return None
+                time.sleep(0.02)
+                continue
+            frame, ts = data
+            if ts <= self._last_shared_ts:
+                if time.time() > deadline:
+                    return None
+                time.sleep(0.02)
+                continue
+            self._last_shared_ts = ts
+            return frame
+        return None
 
     def _ensure_writer(
         self,
@@ -283,90 +469,6 @@ class RecorderWorker(threading.Thread):
         base_fps = float(config.get("record_fps", self.app_config.fps_record or 15))
         return writer, hour_key, base_fps
 
-    def _handle_motion(
-        self,
-        frame,
-        config: dict,
-        base_fps: float,
-        motion_prev_active: bool,
-        stamp: datetime,
-    ) -> bool:
-        if not self._motion_enabled:
-            if self._motion_writer is not None and motion_prev_active:
-                self._motion_writer.stop_clip(datetime.now())
-            self._motion_active = False
-            self._motion_count = 0
-            self._clip_hold_until = 0.0
-            self._clip_start_ts = 0.0
-            self._motion_capture_last_ts = 0.0
-            return False
-
-        ensure_motion(self._motion_state, config)
-        scale = float(config.get("motion_scale", 0.5) or 0.5)
-        scale = max(0.1, min(1.0, scale))
-        if scale < 1.0:
-            h, w = frame.shape[:2]
-            motion_frame = cv2.resize(
-                frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA
-            )
-        else:
-            motion_frame = frame
-        boxes, _ = apply_motion(motion_frame, self._motion_state, config)
-        if boxes and scale < 1.0:
-            inv = 1.0 / scale
-            boxes = [
-                (int(x * inv), int(y * inv), int(w * inv), int(h * inv))
-                for x, y, w, h in boxes
-            ]
-        now = time.time()
-        start_frames = int(config.get("start_frames", 10) or 10)
-        stop_seconds = float(config.get("stop_seconds", 5.0) or 5.0)
-        if boxes:
-            self._motion_count += 1
-            self._motion_last_seen = now
-            if not self._motion_active and self._motion_count >= start_frames:
-                self._motion_active = True
-        else:
-            self._motion_count = 0
-            if self._motion_active and (now - self._motion_last_seen) >= stop_seconds:
-                self._motion_active = False
-        if self._motion_active:
-            _draw_label(frame, "MOTION", 10, 30, bg=(0, 0, 0), fg=(0, 200, 255))
-            capture_interval = float(config.get("motion_capture_seconds", 1.0) or 1.0)
-            capture_interval = max(0.1, capture_interval)
-            if now - self._motion_capture_last_ts >= capture_interval:
-                self._motion_capture_last_ts = now
-                self._save_motion_capture(frame, stamp)
-        if self._motion_writer is not None:
-            stamp = datetime.now()
-            if self._motion_active and not motion_prev_active:
-                h, w = frame.shape[:2]
-                clip_fps = float(config.get("clip_fps", base_fps) or base_fps)
-                self._motion_last_clip_ts = 0.0
-                self._motion_writer.start_clip(stamp, (w, h), clip_fps)
-                self._clip_start_ts = now
-            if self._motion_active:
-                clip_fps = float(config.get("clip_fps", base_fps) or base_fps)
-                clip_fps = max(0.1, clip_fps)
-                if now - self._motion_last_clip_ts >= 1.0 / clip_fps:
-                    self._motion_last_clip_ts = now
-                    self._motion_writer.push_frame(frame.copy())
-                clip_hold = float(config.get("clip_hold_seconds", 2.0) or 2.0)
-                self._clip_hold_until = max(self._clip_hold_until, now + clip_hold)
-            if not self._motion_active:
-                clip_hold = float(config.get("clip_hold_seconds", 2.0) or 2.0)
-                if self._clip_hold_until == 0.0:
-                    self._clip_hold_until = now + clip_hold
-                if now >= self._clip_hold_until and motion_prev_active:
-                    min_clip = float(config.get("clip_min_seconds", 2.0) or 2.0)
-                    if self._clip_start_ts and (now - self._clip_start_ts) < min_clip:
-                        self._motion_writer.close()
-                    else:
-                        self._motion_writer.stop_clip(stamp)
-                    self._clip_hold_until = 0.0
-                    self._clip_start_ts = 0.0
-        return self._motion_active
-
     def _write_record_frame(
         self,
         frame,
@@ -376,22 +478,12 @@ class RecorderWorker(threading.Thread):
         now: float,
         base_fps: float,
     ) -> float:
-        idle_fps = float(config.get("idle_record_fps", 1.0))
-        if self._motion_enabled and not self._motion_active:
-            target_fps = idle_fps
-        else:
-            target_fps = base_fps
-        target_fps = max(0.1, target_fps)
-        interval = 1.0 / target_fps
+        base_fps = max(0.1, base_fps)
+        interval = 1.0 / base_fps
 
         if last_write == 0.0:
             last_write = now
             writer.write(frame)
-            return last_write
-        if self._motion_enabled and self._motion_active:
-            while now - last_write >= interval:
-                writer.write(frame)
-                last_write += interval
             return last_write
         if now - last_write < interval:
             return last_write
@@ -408,14 +500,17 @@ class RecorderWorker(threading.Thread):
         self._last_fps_ts = now
 
     def run(self) -> None:
+        if self._record_backend == "ffmpeg_copy":
+            self._run_ffmpeg_copy()
+            return
+        self._run_opencv()
+
+    def _run_opencv(self) -> None:
         last_write = 0.0
         writer: Optional[cv2.VideoWriter] = None
         current_hour_key: Optional[str] = None
-        self._current_path: Optional[Path] = None
-        self._current_start: Optional[datetime] = None
-        self._motion_writer = MotionClipWriter(self.camera.name, self.stop_event)
-        self._motion_writer.start()
-        motion_prev_active = False
+        self._current_path = None
+        self._current_start = None
         self._start_capture()
 
         while not self.stop_event.is_set():
@@ -423,7 +518,7 @@ class RecorderWorker(threading.Thread):
             if frame is None:
                 continue
 
-            config = get_motion_config()
+            config: dict = {}
             stamp = datetime.now()
             writer, current_hour_key, base_fps = self._ensure_writer(
                 frame, stamp, writer, current_hour_key, config
@@ -431,42 +526,38 @@ class RecorderWorker(threading.Thread):
             if writer is None:
                 time.sleep(0.2)
                 continue
-            motion_prev_active = self._handle_motion(
-                frame, config, base_fps, motion_prev_active, stamp
-            )
 
             now = time.time()
             last_write = self._write_record_frame(
                 frame, writer, config, last_write, now, base_fps
             )
             self._update_fps(time.time())
+            if self._perf is not None:
+                self._perf.record_write(
+                    written=1,
+                    motion=0,
+                    fps=self._fps,
+                    queue_size=self._frame_queue.qsize(),
+                )
 
         self._stop_capture()
         if writer is not None:
             writer.release()
             self._finalize_current(datetime.now())
-        if self._motion_writer is not None:
-            self._motion_writer.close()
 
-    def _save_motion_capture(self, frame, stamp: datetime) -> None:
-        capture_dir = motion_capture_dir_for(self.camera.name, stamp)
-        capture_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{self.camera.name} motion {stamp:%d-%m-%Y %Hh%Mm%Ss}.jpg"
-        path = capture_dir / filename
-        cv2.imwrite(str(path), frame)
+    def _run_ffmpeg_copy(self) -> None:
+        if not find_ffmpeg():
+            self.logger.warning("ffmpeg not available; falling back to OpenCV recorder")
+            self._record_backend = "opencv"
+            self._run_opencv()
+            return
 
-
-def _draw_label(frame, text, x, y, bg=(0, 0, 0), fg=(255, 255, 255)) -> None:
-    (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-    x = max(0, x)
-    y = max(th + 4, y)
-    cv2.rectangle(frame, (x, y - th - baseline - 4), (x + tw + 6, y + 2), bg, -1)
-    cv2.putText(
-        frame,
-        text,
-        (x + 3, y - 2),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        fg,
-        2,
-    )
+        current_hour_key: Optional[str] = None
+        self._current_path = None
+        self._current_start = None
+        while not self.stop_event.is_set():
+            stamp = datetime.now()
+            current_hour_key = self._ensure_ffmpeg_process(stamp, current_hour_key)
+            time.sleep(0.5)
+        if self._ffmpeg_proc is not None:
+            self._stop_ffmpeg_recording(datetime.now())

@@ -50,6 +50,7 @@ class ConfigStore:
         return AppConfig(
             fps_record=app_data.get("fps_record", 15),
             fps_detect=app_data.get("fps_detect", 5),
+            record_bitrate_kbps=app_data.get("record_bitrate_kbps", 254),
             days_keep=app_data.get("days_keep", 7),
             min_free_gb=app_data.get("min_free_gb", 10),
             enable_disk_check=app_data.get("enable_disk_check", True),
@@ -59,6 +60,9 @@ class ConfigStore:
             cam_reconnect_min_s=app_data.get("cam_reconnect_min_s", 0.5),
             cam_reconnect_max_s=app_data.get("cam_reconnect_max_s", 30.0),
             cam_stale_s=app_data.get("cam_stale_s", 5.0),
+            record_backend=app_data.get("record_backend", "opencv"),
+            motion_offline=bool(app_data.get("motion_offline", True)),
+            motion_offline_workers=int(app_data.get("motion_offline_workers", 1) or 1),
             yolo=YoloConfig(
                 model_path=yolo_data.get("model_path", "models/yolo.onnx"),
                 conf_thres=yolo_data.get("conf_thres", 0.5),

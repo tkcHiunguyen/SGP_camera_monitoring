@@ -7,6 +7,8 @@ import cv2
 from PIL import Image, ImageTk
 
 from app.config.models import CameraConfig
+from app.core.stream_manager import StreamManager
+from app.core.frame_store import FrameStore
 from app.core.motion_detector import apply_motion, ensure_motion, get_motion_config
 from app.utils.paths import get_pictures_dir
 
@@ -14,7 +16,12 @@ MODEL_PATH = "3103252.pt"
 CONF_THRES = 0.7
 
 
-def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
+def open_live_popup(
+    parent: tk.Misc,
+    camera: CameraConfig,
+    stream_manager: StreamManager,
+    frame_store: FrameStore,
+) -> None:
     dialog = tk.Toplevel(parent)
     dialog.title(f"Live - {camera.name}")
     dialog.configure(bg="white")
@@ -69,6 +76,7 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
 
     def close_popup() -> None:
         stop_event.set()
+        stream_manager.release(camera.name, "popup")
         dialog.destroy()
 
     ttk.Button(action_row, text="Capture", command=capture_frame).pack(
@@ -84,33 +92,6 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
 
     video_label = ttk.Label(dialog)
     video_label.pack(padx=8, pady=8)
-
-    def open_capture() -> cv2.VideoCapture:
-        if camera.source == "device":
-            return cv2.VideoCapture(camera.device_index)
-        return cv2.VideoCapture(camera.rtsp_url)
-
-    def capture_loop() -> None:
-        backoff = 0.5
-        cap = open_capture()
-        while not stop_event.is_set():
-            if not cap.isOpened():
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 5.0)
-                cap.release()
-                cap = open_capture()
-                continue
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                backoff = 0.5
-                frame = cv2.resize(frame, (1280, 720))
-                with frame_lock:
-                    raw_frame["frame"] = frame
-            else:
-                time.sleep(0.02)
-                cap.release()
-                cap = open_capture()
-        cap.release()
 
     def detect_loop() -> None:
         while not stop_event.is_set():
@@ -130,6 +111,7 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
                     time.sleep(0.02)
                     continue
                 boxes, fg = apply_motion(frame, motion_state, config)
+                merged_box = _merge_boxes(boxes)
                 dt_ms = (time.perf_counter() - t0) * 1000.0
                 now = time.time()
                 motion_log["frames"] += 1
@@ -154,11 +136,9 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
                         bg=(0, 0, 0),
                         fg=(255, 255, 255),
                     )
-                if boxes:
-                    for x, y, w, h in boxes:
-                        cv2.rectangle(
-                            frame, (x, y), (x + w, y + h), (0, 200, 255), 2
-                        )
+                if merged_box:
+                    x, y, w, h = merged_box
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 200, 255), 2)
                     _draw_label(frame, "MOTION", 10, 60, bg=(0, 0, 0), fg=(0, 200, 255))
             if detect_enabled.get():
                 _ensure_detector(detector)
@@ -168,12 +148,17 @@ def open_live_popup(parent: tk.Misc, camera: CameraConfig) -> None:
                 display_frame["frame"] = frame
             time.sleep(0.01)
 
-    threading.Thread(target=capture_loop, daemon=True).start()
+    stream_manager.acquire(camera.name, "popup")
     threading.Thread(target=detect_loop, daemon=True).start()
 
     def update_frame() -> None:
         if stop_event.is_set():
             return
+        frame = frame_store.get_frame(camera.name)
+        if frame is not None:
+            frame = cv2.resize(frame, (1280, 720))
+            with frame_lock:
+                raw_frame["frame"] = frame
         with frame_lock:
             if detect_enabled.get() or motion_enabled.get():
                 frame = display_frame["frame"]
@@ -233,6 +218,16 @@ def _apply_detection(frame, model) -> None:
         track_id = ids[i] if ids is not None else -1
         label = f"id:{track_id} {conf[i]*100:.1f}%"
         _draw_label(frame, label, x1, y1 - 6)
+
+
+def _merge_boxes(boxes: list[tuple[int, int, int, int]] | None):
+    if not boxes:
+        return None
+    x_min = min(b[0] for b in boxes)
+    y_min = min(b[1] for b in boxes)
+    x_max = max(b[0] + b[2] for b in boxes)
+    y_max = max(b[1] + b[3] for b in boxes)
+    return (x_min, y_min, max(1, x_max - x_min), max(1, y_max - y_min))
 
 
 def _draw_label(frame, text, x, y, bg=(0, 0, 0), fg=(255, 255, 255)):

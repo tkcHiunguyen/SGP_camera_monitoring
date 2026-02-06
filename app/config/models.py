@@ -22,6 +22,7 @@ class TrackingConfig:
 class AppConfig:
     fps_record: int = 15
     fps_detect: int = 5
+    record_bitrate_kbps: int = 254
     days_keep: int = 7
     min_free_gb: int = 10
     enable_disk_check: bool = True
@@ -31,6 +32,9 @@ class AppConfig:
     cam_reconnect_min_s: float = 0.5
     cam_reconnect_max_s: float = 30.0
     cam_stale_s: float = 5.0
+    record_backend: str = "opencv"
+    motion_offline: bool = True
+    motion_offline_workers: int = 1
     yolo: YoloConfig = field(default_factory=YoloConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
 

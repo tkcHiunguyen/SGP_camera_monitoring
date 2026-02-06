@@ -97,6 +97,7 @@ class SettingsView(ttk.Frame):
         box.pack(fill=tk.X, pady=(0, 10))
         self._add_int_row(box, "Record FPS", "fps_record")
         self._add_int_row(box, "Detect FPS", "fps_detect")
+        self._add_bool_row(box, "Enable motion (offline)", "motion_offline")
 
     def _build_camera_section(self, parent: tk.Misc) -> None:
         box = ttk.Labelframe(parent, text="Camera Connection", padding=10, style="Settings.TLabelframe")
@@ -200,6 +201,7 @@ class SettingsView(ttk.Frame):
         self._vars["enable_retention"].set(bool(self.app_config.enable_retention))
         self._vars["fps_record"].set(str(self.app_config.fps_record))
         self._vars["fps_detect"].set(str(self.app_config.fps_detect))
+        self._vars["motion_offline"].set(bool(self.app_config.motion_offline))
         self._vars["cam_reconnect_min_s"].set(str(self.app_config.cam_reconnect_min_s))
         self._vars["cam_reconnect_max_s"].set(str(self.app_config.cam_reconnect_max_s))
         self._vars["cam_stale_s"].set(str(self.app_config.cam_stale_s))
@@ -222,6 +224,7 @@ class SettingsView(ttk.Frame):
             self.app_config.enable_retention = bool(self._vars["enable_retention"].get())
             self.app_config.fps_record = int(self._vars["fps_record"].get())
             self.app_config.fps_detect = int(self._vars["fps_detect"].get())
+            self.app_config.motion_offline = bool(self._vars["motion_offline"].get())
             self.app_config.cam_reconnect_min_s = float(self._vars["cam_reconnect_min_s"].get())
             self.app_config.cam_reconnect_max_s = float(self._vars["cam_reconnect_max_s"].get())
             self.app_config.cam_stale_s = float(self._vars["cam_stale_s"].get())

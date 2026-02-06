@@ -11,6 +11,7 @@ __pycache__/
 Files/Log/
 app/Files/Log/
 *.log
+perf_logs/
 
 # Media outputs
 Files/Media/
@@ -18,6 +19,11 @@ Files/Videos/
 app/Files/Videos/
 Files/Tracking/
 Files/Exports/
+Files/*.mp4
+Files/*.ts
+Files/*.avi
+Files/*.mkv
+Files/*.mov
 
 # Models & large binaries
 *.pt
@@ -30,6 +36,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.codex/
 
 # Build artifacts
 build/

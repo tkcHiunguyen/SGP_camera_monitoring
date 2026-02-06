@@ -7,3 +7,4 @@ psutil
 pywin32
 pyyaml
 requests
+pyinstaller==5.13.2

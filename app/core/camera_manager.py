@@ -120,6 +120,36 @@ class CameraManager:
         for worker in workers:
             worker.join(timeout=join_timeout)
 
+    def start_stream(self, name: str) -> None:
+        with self._lock:
+            if name not in self._cameras:
+                raise ValueError("Camera not found")
+            worker = self._workers.get(name)
+            if worker is not None and worker.is_alive():
+                return
+            config = self._cameras[name]
+            if not config.enabled:
+                return
+            runtime = self._runtime[name]
+            stop_event = threading.Event()
+            self._stop_events[name] = stop_event
+            worker = self._create_worker(config, runtime, stop_event)
+            self._workers[name] = worker
+        self._start_worker(name, worker)
+
+    def stop_stream(self, name: str, join_timeout: float = 2.0) -> None:
+        with self._lock:
+            stop_event = self._stop_events.pop(name, None)
+            worker = self._workers.pop(name, None)
+            runtime = self._runtime.get(name)
+        if stop_event is not None:
+            stop_event.set()
+        if worker is not None:
+            worker.join(timeout=join_timeout)
+        if runtime is not None:
+            runtime.status = "Offline"
+        self.frame_store.remove_frame(name)
+
     def _create_worker(
         self,
         config: CameraConfig,

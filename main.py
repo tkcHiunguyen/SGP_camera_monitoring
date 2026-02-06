@@ -11,6 +11,7 @@ from app.core.camera_manager import CameraManager
 from app.core.frame_store import FrameStore
 from app.core.recorder_manager import RecorderManager
 from app.core.tracking_manager import TrackingManager
+from app.core.stream_manager import StreamManager
 from app.ui.app_ui import AppUI
 from app.ui.stop_jobs_dialog import StopJobsDialog
 from app.utils.logging_setup import setup_logging
@@ -36,7 +37,10 @@ def main() -> int:
     if not ensure_single_instance():
         return 1
 
-    os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", DEFAULT_FFMPEG_OPTIONS)
+    os.environ.setdefault(
+        "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+        "rtsp_transport;udp;fflags;nobuffer;flags;low_delay;max_delay;500000;buffer_size;256000;stimeout;5000000",
+    )
 
     config_store = ConfigStore()
     app_config, cameras = config_store.load()
@@ -62,6 +66,7 @@ def main() -> int:
     frame_store = FrameStore()
     camera_manager = CameraManager(config_store, frame_store)
     camera_manager.load_from_config(cameras, start_workers=False)
+    stream_manager = StreamManager(camera_manager, idle_timeout_s=10.0)
     tracking_manager = None
     if app_config.tracking.enabled:
         tracking_manager = TrackingManager(
@@ -86,10 +91,22 @@ def main() -> int:
         root.after(0, _show)
 
     recorder_manager = RecorderManager(
-        app_config, tracking_manager=tracking_manager, on_disk_warning=on_disk_warning
+        app_config,
+        tracking_manager=tracking_manager,
+        on_disk_warning=on_disk_warning,
+        stream_manager=stream_manager,
+        frame_store=frame_store,
     )
 
-    app_ui = AppUI(root, app_config, config_store, camera_manager, recorder_manager)
+    app_ui = AppUI(
+        root,
+        app_config,
+        config_store,
+        camera_manager,
+        recorder_manager,
+        stream_manager,
+        frame_store,
+    )
 
     def on_close() -> None:
         if not messagebox.askyesno(
@@ -102,6 +119,7 @@ def main() -> int:
             recorder_manager.shutdown()
             if tracking_manager is not None:
                 tracking_manager.shutdown()
+            stream_manager.shutdown()
             camera_manager.shutdown()
             root.destroy()
 

@@ -5,6 +5,8 @@ from tkinter import messagebox, ttk
 from app.config.models import CameraConfig
 from app.core.camera_manager import CameraManager
 from app.core.recorder_manager import RecorderManager
+from app.core.stream_manager import StreamManager
+from app.core.frame_store import FrameStore
 from app.ui.job_dialog import JobDialog
 from app.ui.stop_jobs_dialog import StopJobsDialog
 from app.ui.live_actions import open_live
@@ -17,10 +19,14 @@ class RecorderView(ttk.Frame):
         parent: tk.Misc,
         camera_manager: CameraManager,
         recorder_manager: RecorderManager,
+        stream_manager: StreamManager,
+        frame_store: FrameStore,
     ) -> None:
         super().__init__(parent)
         self.camera_manager = camera_manager
         self.recorder_manager = recorder_manager
+        self.stream_manager = stream_manager
+        self.frame_store = frame_store
         self._job_cards: dict[str, dict[str, object]] = {}
         self._selected_jobs: set[str] = set()
         self._layout_state = {"cols": 0, "count": 0, "width": 0}
@@ -40,6 +46,10 @@ class RecorderView(ttk.Frame):
             background="#dbe4f0",
             font=("Bai Jamjuree", 11),
             foreground="#16a34a",
+        )
+        style.configure(
+            "Recorder.Motion.TCheckbutton",
+            font=("Bai Jamjuree", 12, "bold"),
         )
         style.configure("Recorder.CardHeader.TCheckbutton", background="#dbe4f0")
 
@@ -151,9 +161,9 @@ class RecorderView(ttk.Frame):
                         "Device" if camera.source == "device" else "RTSP"
                     )
                     entry["fps_var"].set(f"Write FPS: {job.fps:.1f}")
-                    entry["motion_var"].set(
-                        self.recorder_manager.get_motion_enabled(job.camera_name)
-                    )
+                    motion_var = entry.get("motion_var")
+                    if isinstance(motion_var, tk.BooleanVar):
+                        motion_var.set(bool(job.motion_enabled))
             self._layout_cards(jobs)
 
         self._update_selection_ui()
@@ -229,24 +239,27 @@ class RecorderView(ttk.Frame):
             textvariable=fps_var,
             font=("Bai Jamjuree", 11),
         ).pack(side=tk.LEFT)
-        motion_var = tk.BooleanVar(value=False)
-        motion_check = ttk.Checkbutton(
+        motion_var = tk.BooleanVar(value=bool(job.motion_enabled))
+        motion_toggle = ttk.Checkbutton(
             fps_frame,
-            text="Motion detection",
+            text="Motion",
             variable=motion_var,
+            style="Recorder.Motion.TCheckbutton",
             command=lambda name=camera.name, var=motion_var: self._toggle_motion(
                 name, var
             ),
         )
-        motion_check.pack(side=tk.LEFT, padx=(16, 0))
-        motion_var.set(False)
-
+        if not self.recorder_manager.is_motion_available():
+            motion_toggle.state(["disabled"])
+        motion_toggle.pack(side=tk.RIGHT)
         actions = ttk.Frame(card)
         actions.pack(fill=tk.X, pady=(8, 0))
         ttk.Button(
             actions,
             text="Live",
-            command=lambda cam=camera: open_live(self, cam),
+            command=lambda cam=camera: open_live(
+                self, cam, self.stream_manager, self.frame_store
+            ),
         ).pack(side=tk.LEFT)
         ttk.Button(
             actions,
@@ -259,16 +272,13 @@ class RecorderView(ttk.Frame):
             "status_var": status_var,
             "source_var": source_var,
             "fps_var": fps_var,
-            "motion_var": motion_var,
             "selected_var": selected_var,
+            "motion_var": motion_var,
         }
 
     def _toggle_header_select(self, name: str, var: tk.BooleanVar) -> None:
         var.set(not var.get())
         self._toggle_select(name, var)
-
-    def _toggle_motion(self, name: str, var: tk.BooleanVar) -> None:
-        self.recorder_manager.set_motion_enabled(name, var.get())
 
     def _layout_cards(self, jobs: list | None = None) -> None:
         if jobs is None:
@@ -346,6 +356,16 @@ class RecorderView(ttk.Frame):
             self.select_all_button.pack(side=tk.RIGHT, padx=(0, 8))
         else:
             self.select_all_button.pack_forget()
+
+    def _toggle_motion(self, name: str, var: tk.BooleanVar) -> None:
+        if not self.recorder_manager.is_motion_available():
+            messagebox.showinfo(
+                "Motion unavailable",
+                "Offline motion is disabled in settings.",
+            )
+            var.set(False)
+            return
+        self.recorder_manager.set_job_motion_enabled(name, bool(var.get()))
 
     def _select_all_jobs(self) -> None:
         for name, entry in self._job_cards.items():
